@@ -137,6 +137,14 @@ default, so a container placed *only* in `attacker_zone` has no route to
 Threat-model detail and the segmentation argument live in
 `docs/network-security.md`; this document just states where the lines are.
 
+**Compose materialization note.** `attacker_zone` is declared in
+`docker-compose.yml` but no service attaches to it in Phase 1, so Docker
+Compose does not create the bridge — `docker network ls` shows two zones,
+not three. This does not weaken the boundary above: default-deny between
+Docker bridges is a *daemon-level* property; it doesn't depend on a
+specific bridge being instantiated yet. The bridge materializes in Phase 2
+when the attacker container joins it.
+
 ---
 
 ## 6. Trust boundaries (summary)

@@ -161,11 +161,6 @@ the silent drift the project rules exist to prevent.
   (`33%` / `48%` / `68%` shift horizontally), minor alignment between the
   Pump/Valve/Alarm indicator row. Acceptable for Phase 1; track as a
   Phase 2 polish item, non-blocking.
-- `architecture.md` §5: add one-sentence note that Compose skips
-  materializing `attacker_zone` until a service attaches (confirmed
-  2026-05-20 — only `otlab_ot_zone` + `otlab_mgmt_zone` exist on the live
-  host). Daemon-level default-deny between bridges keeps the segmentation
-  argument intact regardless.
 
 ---
 
