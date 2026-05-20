@@ -37,6 +37,18 @@ services:
       #         Windows can reach it. Container-to-container Modbus does NOT
       #         use this published port (see the fuxa service note below).
       - "502:502"
+    volumes:
+      # OpenPLC v3 state is intermixed with code in webserver/ (DB, uploaded
+      # ST files, active program selection, "Auto-start PLC" flag). A named
+      # volume at the whole webserver/ dir captures the image's seeded content
+      # on first `up` and persists user state across container recreation.
+      # Asymmetric to FUXA's bind mount on appdata/ (FUXA's persistence dir is
+      # clean; OpenPLC's isn't) — full rationale in docs/MASTER.md.
+      #
+      # GOTCHA: changing OPENPLC_COMMIT in plc/Dockerfile requires
+      # `docker compose down -v` before the next --build, otherwise the volume
+      # keeps the old commit's webserver code. README Troubleshooting documents.
+      - openplc_state:/opt/OpenPLC_v3/webserver
     # Least-privilege (DELIBERATE — recruiter talking point): upstream's
     # sample run command uses --privileged for GPIO/hardware I/O. This lab
     # has no hardware, so privileged mode is intentionally NOT set. Rationale
@@ -99,3 +111,13 @@ networks:
     # Docker bridge networks are isolated from each other by default, so a
     # container placed ONLY here cannot reach ot_zone — that is the boundary
     # Phase 2's attacker container will probe. Tracked in docs/MASTER.md.
+
+# -----------------------------------------------------------------------------
+# Volumes — Docker-managed persistence for OpenPLC state. Named volume (not a
+# bind mount) because OpenPLC's state lives intermixed with code in webserver/,
+# so first-up needs Docker's "seed empty volume with image contents" semantics
+# rather than the FUXA-style empty-host-dir bind mount.
+# -----------------------------------------------------------------------------
+volumes:
+  openplc_state:
+    name: otlab_openplc_state

@@ -105,6 +105,10 @@ Once both containers are up:
      compiler is strict — a small fix pass on first upload is **expected**,
      not a blocker (see Troubleshooting → *ST compile errors*).
 4. **Dashboard → Start PLC**. The runtime now serves Modbus/TCP on 502.
+5. **Settings → enable "Auto-start PLC at OpenPLC startup"**. One-time setup
+   per fresh clone — the setting lives in `openplc.db` and persists via the
+   `otlab_openplc_state` named volume, so subsequent
+   `docker compose down`/`up` cycles resume the PLC automatically.
 
 ### Wire up the FUXA HMI  *(MANUAL — web UI)*
 
@@ -238,6 +242,17 @@ PLC shows **Running** in OpenPLC (a stopped PLC serves no Modbus).
 The HMI project persists to `./fuxa/appdata` via a bind mount. If it
 vanished, that volume line in `docker-compose.yml` isn't taking effect —
 verify the path and that you ran from the repo root.
+
+### OpenPLC state is gone after a Dockerfile rebuild
+
+OpenPLC state (uploaded programs, login, "Auto-start PLC" setting) lives in
+a named volume `otlab_openplc_state`. Routine `docker compose down` followed
+by `up` preserves this volume. **If you change `OPENPLC_COMMIT` in
+`plc/Dockerfile`** (or otherwise need to refresh the image's webserver code),
+the named volume still holds the *old* commit's code and state. Run
+`docker compose down -v` before the next `docker compose up --build` so the
+new image seeds a fresh volume. One-time cost when bumping the pinned
+commit, not routine.
 
 ---
 
