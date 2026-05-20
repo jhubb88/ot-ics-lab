@@ -66,7 +66,7 @@ OpenPLC v3 fixed addressing. FUXA connects as a Modbus client and reads:
 | Requirement | Notes |
 |---|---|
 | Windows + **Docker Desktop** | **WSL2 integration enabled for this distro** — MANUAL one-time setup |
-| WSL2 distro | This repo lives at `/mnt/c/Users/jimmy/Desktop/Projects/ot-ics-lab` |
+| WSL2 distro | Clone this repo to any path on your WSL2 filesystem — referenced as `<repo-root>` throughout these docs |
 | **Wireshark** (on Windows) | For the Modbus capture exercise — `docs/monitoring.md` |
 | ~2 GB disk + a few minutes | First run **builds OpenPLC from source** (see below) |
 

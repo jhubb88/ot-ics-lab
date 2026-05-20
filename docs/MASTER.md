@@ -10,7 +10,7 @@ of the deliverable, not just the plumbing.
 - **Phase:** 1 of 2
 - **Phase 1 status:** **Acceptance gate fully met — runtime, visual HMI, and Modbus/TCP capture all proven end-to-end** (see Acceptance Gate)
 - **Last updated:** 2026-05-20
-- **Repo:** `/mnt/c/Users/jimmy/Desktop/Projects/ot-ics-lab`
+- **Repo:** `<repo-root>` (your local clone location; absolute path is environment-specific)
 
 ---
 
@@ -134,6 +134,12 @@ the silent drift the project rules exist to prevent.
   2026-05-19 — this repo had a Phase-1-anticipating `.gitignore` from day
   one but `git init` only happened on day three, meaning every prior fix
   pass (MATIEC, HMI, MASTER.md updates) shipped without revision history.
+- 2026-05-20 — pre-public-flip scan caught two hardcoded absolute paths in
+  committed docs (`README.md`, `docs/MASTER.md`), both pointing at the
+  author's local WSL2 clone location. Generalized to a `<repo-root>`
+  placeholder, defined inline at each site. Process improvement: before
+  any first push to a public repo, grep for user-specific paths and known
+  sensitive strings as a standard pre-flight.
 
 ---
 
