@@ -1,0 +1,101 @@
+# =============================================================================
+# OT/ICS Security Lab — Phase 1
+# 2 services only. 3 networks (attacker_zone defined but EMPTY in Phase 1).
+#
+# No top-level `version:` key on purpose — Docker Compose v2 deprecated it.
+# WSL2 + Docker Desktop reminder (full detail in README.md):
+#   - From the WINDOWS browser:        use  http://localhost:<port>
+#   - Container talking to container:  use the SERVICE NAME, never localhost
+# =============================================================================
+
+services:
+
+  # ---------------------------------------------------------------------------
+  # openplc — the PLC. Runs the tank-fill control logic and serves Modbus/TCP.
+  # Built from PINNED official upstream source (see plc/Dockerfile for the full
+  # supply-chain rationale — that "why" is part of the recruiter story).
+  # ---------------------------------------------------------------------------
+  openplc:
+    build:
+      context: ./plc
+      dockerfile: Dockerfile
+    image: ot-ics-lab/openplc:v3-pinned     # local tag only; never pushed
+    container_name: otlab-openplc
+    restart: unless-stopped
+    networks:
+      - ot_zone      # process/control network — Modbus/TCP lives here
+      - mgmt_zone    # human reaches the OpenPLC web editor from a browser
+    ports:
+      # KNOWN GOTCHA — OpenPLC exposes TWO DIFFERENT ports:
+      #
+      #   8080  OpenPLC WEB EDITOR / management UI (human, browser)
+      #         WSL2: open http://localhost:8080 in the *Windows* browser.
+      - "8080:8080"
+      #
+      #   502   Modbus/TCP server (machine). FUXA talks to this.
+      #         Published to host ONLY so Wireshark / a Modbus client on
+      #         Windows can reach it. Container-to-container Modbus does NOT
+      #         use this published port (see the fuxa service note below).
+      - "502:502"
+    # Least-privilege (DELIBERATE — recruiter talking point): upstream's
+    # sample run command uses --privileged for GPIO/hardware I/O. This lab
+    # has no hardware, so privileged mode is intentionally NOT set. Rationale
+    # repeated in README.md and docs/network-security.md.
+    # VERIFY-ON-FIRST-RUN: if the runtime misbehaves without privileged, the
+    # documented fallback lives in README.md (Troubleshooting).
+
+  # ---------------------------------------------------------------------------
+  # fuxa — the HMI. The screen an operator looks at. Talks Modbus/TCP to
+  # OpenPLC and renders tank level / pump / valve / alarm.
+  # ---------------------------------------------------------------------------
+  fuxa:
+    image: frangoteam/fuxa:1.3.1            # verified real tag; no moving "latest"
+    container_name: otlab-fuxa
+    restart: unless-stopped
+    depends_on:
+      - openplc
+    networks:
+      - ot_zone      # reach OpenPLC's Modbus across the OT network
+      - mgmt_zone    # open the FUXA HMI in a browser
+    ports:
+      #   1881  FUXA HMI web UI (human, browser)
+      #         WSL2: open http://localhost:1881 in the *Windows* browser.
+      - "1881:1881"
+    volumes:
+      # KNOWN GOTCHA (the #1 first-time FUXA failure): without this bind mount
+      # FUXA stores its project inside the container and the ENTIRE HMI SCREEN
+      # is LOST on container recreation. This persists it to ./fuxa/appdata.
+      # /usr/src/app/FUXA/server/_appdata is FUXA's documented data directory.
+      - ./fuxa/appdata:/usr/src/app/FUXA/server/_appdata
+    # KNOWN GOTCHA — FUXA -> OpenPLC Modbus link:
+    # Inside the FUXA web UI, the Modbus device host MUST be the service name
+    #   openplc   on port   502   — NOT localhost, NOT 127.0.0.1.
+    # Containers reach each other by service name on a shared network
+    # (ot_zone). "localhost" inside the FUXA container is FUXA itself. This
+    # is the most common first-time failure; step-by-step fix in README.md.
+
+# -----------------------------------------------------------------------------
+# Networks — explicit zoning. This segmentation IS the point of the lab.
+# Honest scope note (expanded in docs/network-security.md): in Phase 1 both
+# legitimate services are multi-homed on ot_zone + mgmt_zone for usability.
+# The real, demonstrable enforcement boundary is attacker_zone, which is an
+# isolated bridge with no route to ot_zone.
+# -----------------------------------------------------------------------------
+networks:
+  ot_zone:
+    name: otlab_ot_zone
+    driver: bridge
+    # "Plant floor" / process network. Modbus/TCP between HMI and PLC.
+
+  mgmt_zone:
+    name: otlab_mgmt_zone
+    driver: bridge
+    # "Engineering / management" network. Human web access to the UIs.
+
+  attacker_zone:
+    name: otlab_attacker_zone
+    driver: bridge
+    # DEFINED ON PURPOSE, INTENTIONALLY EMPTY IN PHASE 1. No service attached.
+    # Docker bridge networks are isolated from each other by default, so a
+    # container placed ONLY here cannot reach ot_zone — that is the boundary
+    # Phase 2's attacker container will probe. Tracked in docs/MASTER.md.

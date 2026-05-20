@@ -1,0 +1,27 @@
+# =============================================================================
+# OT/ICS Security Lab — .gitignore
+# Keeps runtime state and capture data OUT of version control. The folder
+# structure is preserved via committed .gitkeep marker files.
+# =============================================================================
+
+# --- FUXA runtime / HMI project state -------------------------------------
+# This is live, machine-generated data written by the FUXA container. It is
+# NOT source. The HMI design itself is recreated from README.md steps.
+# The .gitkeep marker keeps the directory in git; everything else is ignored.
+fuxa/appdata/*
+!fuxa/appdata/.gitkeep
+
+# --- Packet captures -------------------------------------------------------
+# Wireshark output. Can be large and may contain lab traffic detail; never
+# auto-committed. Keep the directory, ignore the captures.
+captures/*
+!captures/.gitkeep
+*.pcap
+*.pcapng
+
+# --- OS / editor noise -----------------------------------------------------
+.DS_Store
+Thumbs.db
+*.swp
+.vscode/
+.idea/
