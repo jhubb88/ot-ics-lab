@@ -111,8 +111,12 @@ connection). Ready for public repo flip after remaining closeout items
 - **OpenPLC v3 web UI Monitoring page is unreliable** — shows zeros and only
   3 of 6 variables despite correct live Modbus output. Cosmetic UI quirk of
   OpenPLC v3, not a runtime fault. Modbus/TCP (pymodbus / Wireshark) is the
-  source of truth. Dashboard status also needs a hard refresh (Ctrl+F5)
-  after Start PLC — harmless cache behaviour.
+  source of truth. Dashboard status display also caches stale state: after
+  Start PLC *and* after `docker compose down`/`up` cycles, it can show the
+  wrong run/stop indicator even with Ctrl+F5. Authoritative "is the PLC
+  actually running" answer is `docker logs otlab-openplc` or a Modbus read
+  against `:502` (e.g., pymodbus reading HR0 — non-zero, cycling values
+  prove the PLC is running), never the dashboard.
 - FUXA → OpenPLC Modbus host must be the service name `openplc:502`, never
   `localhost` — the #1 first-run failure (fix in README Troubleshooting).
 
