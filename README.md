@@ -1,16 +1,21 @@
-# OT/ICS Security Lab — Tank-Fill Process
+# OT/ICS Lab — Tank-Fill Process
 
 A self-contained, vendor-neutral Operational Technology (OT) / Industrial
-Control Systems (ICS) security lab. It runs a realistic **PLC + HMI** control
-loop for a generic plant tank-fill process, entirely in Docker, with
-deliberate, defensible security decisions baked in.
+Control Systems (ICS) lab. It runs a realistic **PLC + HMI** control loop
+for a generic plant tank-fill process, entirely in Docker, with deliberate,
+defensible architecture and security decisions baked in.
 
 This is a **portfolio / interview artifact**. The *reasoning* behind the
 build choices is part of the project — see **Security Talking Points** below.
 
 > **Scope:** Phase 1 of 2. Phase 1 = 2 services (PLC + HMI), 3 network zones,
-> capturable Modbus/TCP traffic. Phase 2 (attacker container, IDS, historian)
-> is documented backlog only — see `docs/MASTER.md`.
+> capturable Modbus/TCP traffic, supply-chain control, segmentation
+> rationale — the architecture and monitoring foundation. **Phase 2 extends
+> this into operational security** (attacker container in `attacker_zone`,
+> Suricata detection firing on the Modbus indicators, written attack
+> scenarios) and is documented backlog only — see `docs/MASTER.md`.
+
+![FUXA HMI rendering the simulated plant tank with pump, valve, and alarm indicators during a normal fill/drain cycle](docs/img/fuxa-hmi.png)
 
 ---
 
@@ -43,6 +48,8 @@ and a **high-level alarm**:
 | Level ≤ 20 % | Start pump + open inlet valve (begin filling) |
 | Level ≥ 80 % | Stop pump + close valve (begin draining) |
 | Level ≥ 90 % | High-high alarm ON |
+
+![FUXA HMI at level 90% with the high-high alarm coil active — the alarm indicator switches from NORMAL to ACTIVE in the live HMI](docs/img/fuxa-alarm.png)
 
 ---
 
@@ -109,6 +116,8 @@ Once both containers are up:
    per fresh clone — the setting lives in `openplc.db` and persists via the
    `otlab_openplc_state` named volume, so subsequent
    `docker compose down`/`up` cycles resume the PLC automatically.
+
+![OpenPLC dashboard showing the PLC running with tank_fill.st loaded; runtime log shows the Modbus client connection accepted on :502](docs/img/openplc-running.png)
 
 ### Wire up the FUXA HMI  *(MANUAL — web UI)*
 
@@ -203,6 +212,8 @@ Modbus/TCP is plaintext and unauthenticated by design. Capturing it in
 Wireshark (`docs/monitoring.md`) shows exactly what an on-path attacker in
 the OT network would see and could forge — the core OT security lesson.
 
+![Wireshark filtered on modbus showing FUXA→OpenPLC steady FC 3 / FC 1 read polling — plaintext, no credentials, no integrity check](docs/img/wireshark-modbus.png)
+
 ---
 
 ## Troubleshooting
@@ -279,3 +290,9 @@ ot-ics-lab/
 
 Phase 1 build progress is tracked in **`docs/MASTER.md`** (single source of
 truth). Phase 2 backlog is listed there too.
+
+---
+
+## License
+
+MIT — see [`LICENSE`](LICENSE).
