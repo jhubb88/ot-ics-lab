@@ -8,8 +8,8 @@ of the deliverable, not just the plumbing.
 - **Project:** Vendor-neutral OT/ICS security lab (portfolio / recruiter-facing)
 - **Process simulated:** Generic plant tank-fill (level, pump, valve, high alarm)
 - **Phase:** 1 of 2
-- **Phase 1 status:** **Acceptance gate met — runtime + visual HMI proven end-to-end; Wireshark capture pending** (see Acceptance Gate)
-- **Last updated:** 2026-05-19
+- **Phase 1 status:** **Acceptance gate fully met — runtime, visual HMI, and Modbus/TCP capture all proven end-to-end** (see Acceptance Gate)
+- **Last updated:** 2026-05-20
 - **Repo:** `/mnt/c/Users/jimmy/Desktop/Projects/ot-ics-lab`
 
 ---
@@ -49,9 +49,9 @@ acceptance — see the gate below.
 
 ---
 
-## Acceptance Gate (Phase 1 — runtime + visual HMI proven; Wireshark capture pending)
+## Acceptance Gate (Phase 1 — fully met)
 
-Phase 1 runtime + visual HMI accepted; only the Wireshark capture remains open:
+All four Phase 1 acceptance criteria are met:
 
 - [x] `docker compose up --build` brings up `otlab-openplc` + `otlab-fuxa`
 - [x] `tank_fill.st` compiles in OpenPLC and the PLC is **Running**
@@ -64,15 +64,23 @@ Phase 1 runtime + visual HMI accepted; only the Wireshark capture remains open:
       NORMAL/ACTIVE indicators) renders the live cycling — screenshot at
       `docs/img/fuxa-hmi.png` shows tank at 68 % with a manually-triggered
       alarm so all three indicator states are visible in one frame.
-- [ ] Modbus/TCP packets captured in Wireshark per `docs/monitoring.md`
+- [x] Modbus/TCP packets captured in Wireshark per `docs/monitoring.md` —
+      capture taken from inside `otlab-openplc` on the `ot_zone` bridge:
+      2502 packets, 0 dropped, steady FC 3 + FC 1 polling pattern from FUXA
+      (172.19.0.3) → OpenPLC (172.19.0.2:502), no writes (FC 5/6/15/16 = 0),
+      no Modbus exceptions, ~1 s cadence, single long-lived TCP connection.
+      Matches `docs/monitoring.md` §4 normal baseline exactly. Capture at
+      `captures/modbus-baseline-20260520.pcap` (gitignored); screenshot at
+      `docs/img/wireshark-modbus.png`.
 
-**Status:** runtime + visual HMI verified end-to-end in this environment —
-OpenPLC built from pinned source, ST compiled clean, PLC Running, live
-Modbus/TCP serving correct cycling data on :502, FUXA HMI animating with all
-six bound tags (Level HR0, SP_Low HR1, SP_High HR2, Pump Coil 0, Valve Coil 1,
-Alarm Coil 2). One honest gap remains: the Wireshark capture is not yet
-taken. Honesty about that gap is deliberate (see `network-security.md` —
-overstating a lab's state is itself an anti-pattern).
+**Status:** Phase 1 fully accepted in this environment — OpenPLC built from
+pinned source, ST compiled clean, PLC Running, live Modbus/TCP serving correct
+cycling data on :502, FUXA HMI animating with all six bound tags (Level HR0,
+SP_Low HR1, SP_High HR2, Pump Coil 0, Valve Coil 1, Alarm Coil 2), and the
+Modbus/TCP capture confirms the clean normal-poll baseline documented in
+`docs/monitoring.md` §4 (reads-only, single client, single long-lived
+connection). Ready for public repo flip after remaining closeout items
+(see Open Items).
 
 ---
 
@@ -131,9 +139,9 @@ the silent drift the project rules exist to prevent.
 
 ## Open Items (Phase 1 follow-ups — not blocking acceptance)
 
-- Wireshark Modbus/TCP capture per `docs/monitoring.md`.
-- Additional portfolio screenshots beyond the HMI (HMI captured at
-  `docs/img/fuxa-hmi.png`; full-lab topology + Wireshark frames pending).
+- Additional portfolio screenshots beyond the two already captured
+  (`docs/img/fuxa-hmi.png`, `docs/img/wireshark-modbus.png`):
+  `docs/img/openplc-running.png` and `docs/img/fuxa-alarm.png` still pending.
 - FUXA HMI layout polish — numeric `%` label floats per value width
   (`33%` / `48%` / `68%` shift horizontally), minor alignment between the
   Pump/Valve/Alarm indicator row. Acceptable for Phase 1; track as a
