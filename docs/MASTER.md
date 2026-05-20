@@ -79,8 +79,7 @@ cycling data on :502, FUXA HMI animating with all six bound tags (Level HR0,
 SP_Low HR1, SP_High HR2, Pump Coil 0, Valve Coil 1, Alarm Coil 2), and the
 Modbus/TCP capture confirms the clean normal-poll baseline documented in
 `docs/monitoring.md` §4 (reads-only, single client, single long-lived
-connection). Ready for public repo flip after remaining closeout items
-(see Open Items).
+connection). Ready for public repo flip.
 
 ---
 
@@ -154,9 +153,6 @@ the silent drift the project rules exist to prevent.
 
 ## Open Items (Phase 1 follow-ups — not blocking acceptance)
 
-- Additional portfolio screenshots beyond the two already captured
-  (`docs/img/fuxa-hmi.png`, `docs/img/wireshark-modbus.png`):
-  `docs/img/openplc-running.png` and `docs/img/fuxa-alarm.png` still pending.
 - FUXA HMI layout polish — numeric `%` label floats per value width
   (`33%` / `48%` / `68%` shift horizontally), minor alignment between the
   Pump/Valve/Alarm indicator row. Acceptable for Phase 1; track as a

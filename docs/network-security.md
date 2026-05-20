@@ -133,6 +133,37 @@ real Modbus works — the lesson *is* the exposure). `docs/monitoring.md`
 shows capturing this traffic in Wireshark and what normal vs. suspicious
 looks like.
 
+### 5.3 Output-register write semantics (Phase 1 empirical)
+
+The §5.2 "Write holding registers / coils" line is honest about exposure
+but coarse — a Phase 1 finding refines it.
+
+**Output registers are reasserted every scan (architectural, not
+authenticated).** OpenPLC writes HR0–HR2 (level + setpoints) from the
+running program on every ~100 ms scan. An external write to one of these
+registers is overwritten in ≤1 scan. Verified empirically: pymodbus
+writing `95` to HR0 at 20 Hz for 3 seconds held the falsified value only
+while the write loop ran; the natural cycle resumed within ~1 scan after
+writes stopped, and the control logic (hysteresis on the in-PLC `Level`
+variable) was never affected.
+
+| Attacker action on `ot_zone` | Effect |
+|---|---|
+| Sustained writes to HR0–HR2 | HMI shows falsified values *while the attack runs*; PLC behaviour unchanged |
+| Single/burst writes to HR0–HR2 | Overwritten ≤1 scan; HMI flickers at most |
+| Writes to internal control state | Not exposed via Modbus — control logic runs against the in-PLC `Level`, not the published register |
+
+**Scope honesty.** This covers only *output* registers (the PLC writes
+them). Writes to **coils** (FC 5/15) and to registers the PLC consumes as
+inputs (not used in this Phase 1 program, since the process is simulated
+internally) are a different question and were not tested here — they
+belong with Phase 2's attacker container exercises.
+
+Refined framing: an attacker on `ot_zone` can **observe everything** and
+can **falsify the HMI's view while actively writing**, but cannot
+**redirect the PLC's control decisions** without compromising the PLC
+program itself.
+
 ---
 
 ## 6. Attacker's view

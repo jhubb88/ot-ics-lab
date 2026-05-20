@@ -153,9 +153,9 @@ authoring-discipline rule in `docs/MASTER.md`).
 
 | File | Shows | Status |
 |---|---|---|
-| `docs/img/openplc-running.png` | OpenPLC dashboard, PLC **Running**, program loaded | **MANUAL — pending capture** |
+| `docs/img/openplc-running.png` | OpenPLC dashboard, PLC **Running**, program loaded | Captured 2026-05-20 |
 | `docs/img/fuxa-hmi.png` | FUXA screen mid-cycle (tank ~half, pump ON) | Captured 2026-05-19 |
-| `docs/img/fuxa-alarm.png` | FUXA with high-high alarm active | **MANUAL — pending capture** |
+| `docs/img/fuxa-alarm.png` | FUXA with high-high alarm active | Captured 2026-05-20 |
 | `docs/img/wireshark-modbus.png` | Wireshark filtered on `modbus` (`docs/monitoring.md`) | Captured 2026-05-20 |
 
 *(Pending captures require a live run on your machine and can't be
