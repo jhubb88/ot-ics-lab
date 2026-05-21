@@ -8,12 +8,14 @@ defensible architecture and security decisions baked in.
 This is a **portfolio / interview artifact**. The *reasoning* behind the
 build choices is part of the project — see **Security Talking Points** below.
 
-> **Scope:** Phase 1 of 2. Phase 1 = 2 services (PLC + HMI), 3 network zones,
+> **Scope:** Phase 1 of 3. Phase 1 = 2 services (PLC + HMI), 3 network zones,
 > capturable Modbus/TCP traffic, supply-chain control, segmentation
 > rationale — the architecture and monitoring foundation. **Phase 2 extends
 > this into operational security** (attacker container in `attacker_zone`,
 > Suricata detection firing on the Modbus indicators, written attack
-> scenarios) and is documented backlog only — see `docs/MASTER.md`.
+> scenarios). **Phase 3 is platform migration and zone hardening** (OpenPLC
+> v3 → v4, harden the `mgmt_zone` ↔ `ot_zone` boundary). Phases 2 and 3 are
+> documented backlog only — see `docs/MASTER.md`.
 
 ![FUXA HMI rendering the simulated plant tank with pump, valve, and alarm indicators during a normal fill/drain cycle](docs/img/fuxa-hmi.png)
 
@@ -338,7 +340,7 @@ ot-ics-lab/
 ## Status
 
 Phase 1 build progress is tracked in **`docs/MASTER.md`** (single source of
-truth). Phase 2 backlog is listed there too.
+truth). Phase 2 and Phase 3 backlogs are listed there too.
 
 ---
 
