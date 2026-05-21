@@ -7,9 +7,9 @@ of the deliverable, not just the plumbing.
 
 - **Project:** Vendor-neutral OT/ICS security lab (portfolio / recruiter-facing)
 - **Process simulated:** Generic plant tank-fill (level, pump, valve, high alarm)
-- **Phase:** 1 of 2
+- **Phase:** 1 of 3 (Phase 1 complete; Phase 2 = security work on v3, Phase 3 = platform migration + zone hardening)
 - **Phase 1 status:** **Acceptance gate fully met — runtime, visual HMI, and Modbus/TCP capture all proven end-to-end** (see Acceptance Gate)
-- **Last updated:** 2026-05-20
+- **Last updated:** 2026-05-21
 - **Repo:** `<repo-root>` (your local clone location; absolute path is environment-specific)
 
 ---
@@ -22,7 +22,7 @@ of the deliverable, not just the plumbing.
 | `docs/architecture.md` | Components, control + process model, data flow, zones, trust boundaries |
 | `docs/network-security.md` | Threat model, supply-chain control, least privilege, segmentation, exposure, attacker view |
 | `docs/monitoring.md` | Wireshark Modbus capture (host + container paths), normal baseline vs. suspicious |
-| `docs/MASTER.md` | This file — status, locked decisions, risks, Phase 2 backlog |
+| `docs/MASTER.md` | This file — status, locked decisions, risks, Phase 2 and Phase 3 backlogs |
 | `plc/Dockerfile` | OpenPLC v3 built from pinned upstream source (supply-chain rationale in header) |
 | `plc/tank_fill.st` | Control logic + process model, IEC 61131-3 Structured Text |
 | `docker-compose.yml` | 2 services, 3 networks, FUXA persistence |
@@ -182,6 +182,16 @@ the silent drift the project rules exist to prevent.
   persistence alone is insufficient — for stateful services with
   multi-file consistency requirements, document the recovery procedure
   as a Known Risk, not as a tribal-knowledge incident response.
+- 2026-05-21 — a verification spike on an unfamiliar Docker image (OpenPLC
+  v4) caused Docker Desktop to terminate the running Phase 1 containers to
+  free memory for the new image's startup. Phase 1 recovered cleanly in
+  8 seconds — the previous day's named-volume persistence work was
+  inadvertently stress-tested and passed (live Modbus value within one
+  verification cycle). Process improvement: before pulling or running a
+  large unfamiliar Docker image on a Windows/WSL2 host, either raise Docker
+  Desktop's memory limit first, or `docker compose stop` the existing stack
+  to give the new image headroom — resilience to a forced shutdown is not
+  a license to invite one.
 
 ---
 
@@ -194,25 +204,39 @@ the silent drift the project rules exist to prevent.
 
 ---
 
-## Phase 2 Backlog (documented only — NOT built in Phase 1)
+## Phase 2 Backlog (security operations on the Phase 1 stack — documented; not built)
 
 - [ ] Suricata passive monitoring
 - [ ] Attacker container in `attacker_zone` (ICS recon/attack tooling)
 - [ ] Historian (InfluxDB + Grafana)
 - [ ] Written-up attack scenarios
 - [ ] Real network diagram with assigned IPs
+
+---
+
+## Phase 3 Backlog (platform migration and zone hardening — documented; not built)
+
 - [ ] Tighten `mgmt_zone` ↔ `ot_zone` into a hard boundary (currently soft)
-- [ ] Evaluate migration OpenPLC v3 → v4 (v3 is upstream EOL).
-      Disaster recovery on 2026-05-21 is direct evidence — v4's
-      architecture may eliminate this class of state-drift brittleness.
+- [ ] Migrate OpenPLC v3 → v4 (see spike findings 2026-05-21). v3 is upstream
+      EOL, and disaster recovery on 2026-05-21 is direct evidence — v4's
+      architecture may eliminate this class of state-drift brittleness. The
+      same-day verification spike confirmed v4 is fundamentally different
+      from v3: no web UI (REST API on port 8443 only, by design), Modbus
+      is an add-on plugin (`modbus_slave`) that loads at container start
+      but does not begin listening on port 502 until the PLC enters RUNNING
+      state, and the PLC cannot reach RUNNING without a compiled program
+      uploaded via the REST API (any HTTP client can drive that upload).
+      Migration is its own dedicated phase, not a drop-in image swap —
+      Phase 3 will need the REST-driven program upload workflow figured
+      out before v3-equivalent functionality is back online.
 
 ---
 
 ## Environment Prerequisite (MANUAL)
 
 - Docker Desktop on Windows with **WSL2 integration enabled** for this distro.
-  *(Status 2026-05-19: Docker Desktop installed, WSL2 integration confirmed.
-  Lab proven running end-to-end — `docker compose up --build` built OpenPLC
-  from pinned source, ST compiled clean, PLC Running, live Modbus/TCP on :502
-  verified via pymodbus, FUXA connected. Visual HMI + Wireshark pending —
-  see Acceptance Gate.)*
+  *(Status 2026-05-21: Docker Desktop installed, WSL2 integration confirmed.
+  Lab proven running end-to-end — OpenPLC built from pinned source, ST
+  compiled clean, PLC Running, live Modbus/TCP on :502 verified via pymodbus,
+  FUXA connected with HMI animating, Wireshark baseline capture landed.
+  Phase 1 Acceptance Gate fully met.)*
