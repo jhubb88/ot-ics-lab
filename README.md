@@ -265,6 +265,55 @@ the named volume still holds the *old* commit's code and state. Run
 new image seeds a fresh volume. One-time cost when bumping the pinned
 commit, not routine.
 
+### Disaster recovery — OpenPLC web UI dead after a restart, runtime not starting
+
+**Symptom.** After a Docker Desktop restart or a `docker compose down`/`up`
+cycle, the OpenPLC web UI at `http://localhost:8080` is unreachable
+(connection refused, or the page never loads), and the PLC runtime isn't
+serving Modbus on `:502` either. FUXA can't connect.
+
+**Cause.** Out-of-sync internal state: the named volume preserved
+`openplc.db`, but the `Programs` table row for the active program is
+missing while OpenPLC's `active_program` pointer file still references it.
+At startup, the webserver queries the Programs table, gets no row, and
+crashes with `TypeError: 'NoneType' object is not subscriptable`. The
+runtime can't start because no program is loadable.
+
+**Diagnose.** Confirm the crash signature in the container logs:
+
+```bash
+docker logs otlab-openplc 2>&1 | grep -A3 "NoneType"
+```
+
+If you see `TypeError: 'NoneType' object is not subscriptable` at
+`webserver.py:2726`, this is the failure.
+
+**Recover.** Restore the missing Programs row from inside the container:
+
+```bash
+# 1. Find the filename the pointer references
+docker exec otlab-openplc cat /opt/OpenPLC_v3/webserver/active_program
+#    Output is something like: 927367.st
+
+# 2. Insert the matching Programs row (substitute YOUR filename from step 1)
+docker exec otlab-openplc sqlite3 /opt/OpenPLC_v3/webserver/openplc.db \
+  "INSERT INTO Programs (Name, Description, File, Date_upload) VALUES \
+   ('Tank Fill', 'Generic plant tank-fill process', '<filename>', strftime('%s','now'));"
+
+# 3. Restart so OpenPLC re-reads state
+docker compose restart openplc
+```
+
+**Verify.** `curl -I http://localhost:8080` should return `HTTP/1.1 302
+Found` (redirect to login). FUXA reconnects automatically once the PLC
+runtime is up. Full `docker compose down`/`up -d` cycle should now succeed
+cleanly — the recovery is persistent because the inserted row lives in the
+named volume.
+
+Tracked in `docs/MASTER.md` Known Risks; this is an OpenPLC v3 brittleness
+(no transactional linkage between the pointer file and the DB row), not a
+lab bug.
+
 ---
 
 ## Project layout

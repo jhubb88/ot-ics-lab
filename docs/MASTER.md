@@ -116,6 +116,36 @@ connection). Ready for public repo flip.
   actually running" answer is `docker logs otlab-openplc` or a Modbus read
   against `:502` (e.g., pymodbus reading HR0 — non-zero, cycling values
   prove the PLC is running), never the dashboard.
+- **OpenPLC startup crash if `Programs` table and `active_program` pointer
+  drift apart** — observed 2026-05-21 after a Docker Desktop restart cycle.
+  The named volume preserved `openplc.db`, but the `Programs` table row for
+  the active program was missing while `/opt/OpenPLC_v3/webserver/active_program`
+  still pointed at `927367.st`. At HTTP server startup `webserver.py:2726`
+  runs `SELECT * FROM Programs WHERE File = '<active_program>'`; with no
+  row it returns `None`, and the `run_http` thread dies with
+  `TypeError: 'NoneType' object is not subscriptable`. The web UI (`:8080`)
+  is then unreachable and the Modbus runtime never starts (it needs a
+  loaded program). Recovery — restore the missing row from inside the
+  container:
+
+  ```bash
+  # 1. Read the pointer to get the active program filename
+  docker exec otlab-openplc cat /opt/OpenPLC_v3/webserver/active_program
+
+  # 2. Insert the matching Programs row (substitute the filename from step 1)
+  docker exec otlab-openplc sqlite3 /opt/OpenPLC_v3/webserver/openplc.db \
+    "INSERT INTO Programs (Name, Description, File, Date_upload) VALUES \
+     ('Tank Fill', 'Generic plant tank-fill process', '<filename>', strftime('%s','now'));"
+
+  # 3. Restart so OpenPLC re-reads state
+  docker compose restart openplc
+  ```
+
+  Verified persistent across a subsequent full `docker compose down`/`up -d`
+  cycle (`curl -I http://localhost:8080` returns `HTTP/1.1 302`, FUXA
+  reconnects). The recovery patches the symptom; the underlying cause is
+  OpenPLC v3's lack of transactional linkage between the pointer file and
+  the database row, not a bug in the lab.
 - FUXA → OpenPLC Modbus host must be the service name `openplc:502`, never
   `localhost` — the #1 first-run failure (fix in README Troubleshooting).
 
@@ -148,6 +178,12 @@ the silent drift the project rules exist to prevent.
   down/up cycle test. Process improvement: when one service in a stack
   has persistence wired, audit every other service for the same need at
   the same time, not later.
+- 2026-05-21 — Persistence of a named volume kept the data, but OpenPLC's
+  own startup code is brittle if internal state files (`active_program`
+  pointer, `Programs` DB rows) drift out of sync. Process improvement:
+  persistence alone is insufficient — for stateful services with
+  multi-file consistency requirements, document the recovery procedure
+  as a Known Risk, not as a tribal-knowledge incident response.
 
 ---
 
@@ -168,7 +204,9 @@ the silent drift the project rules exist to prevent.
 - [ ] Written-up attack scenarios
 - [ ] Real network diagram with assigned IPs
 - [ ] Tighten `mgmt_zone` ↔ `ot_zone` into a hard boundary (currently soft)
-- [ ] Evaluate migration OpenPLC v3 → v4 (v3 is upstream EOL)
+- [ ] Evaluate migration OpenPLC v3 → v4 (v3 is upstream EOL).
+      Disaster recovery on 2026-05-21 is direct evidence — v4's
+      architecture may eliminate this class of state-drift brittleness.
 
 ---
 
