@@ -126,7 +126,11 @@ connection). Ready for public repo flip.
   `TypeError: 'NoneType' object is not subscriptable`. The web UI (`:8080`)
   is then unreachable and the Modbus runtime never starts (it needs a
   loaded program). Recovery — restore the missing row from inside the
-  container:
+  container. The underlying cause is OpenPLC v3's lack of transactional
+  linkage between the pointer file and the database row, not a bug in
+  the lab; the recovery below is verified persistent across a subsequent
+  full `docker compose down`/`up -d` cycle (`curl -I http://localhost:8080`
+  returns `HTTP/1.1 302`, FUXA reconnects):
 
   ```bash
   # 1. Read the pointer to get the active program filename
@@ -140,12 +144,6 @@ connection). Ready for public repo flip.
   # 3. Restart so OpenPLC re-reads state
   docker compose restart openplc
   ```
-
-  Verified persistent across a subsequent full `docker compose down`/`up -d`
-  cycle (`curl -I http://localhost:8080` returns `HTTP/1.1 302`, FUXA
-  reconnects). The recovery patches the symptom; the underlying cause is
-  OpenPLC v3's lack of transactional linkage between the pointer file and
-  the database row, not a bug in the lab.
 - FUXA → OpenPLC Modbus host must be the service name `openplc:502`, never
   `localhost` — the #1 first-run failure (fix in README Troubleshooting).
 
