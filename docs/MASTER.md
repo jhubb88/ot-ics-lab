@@ -9,7 +9,7 @@ of the deliverable, not just the plumbing.
 - **Process simulated:** Generic plant tank-fill (level, pump, valve, high alarm)
 - **Phase:** 1 of 3 (Phase 1 complete; Phase 2 = security work on v3, Phase 3 = platform migration + zone hardening)
 - **Phase 1 status:** **Acceptance gate fully met — runtime, visual HMI, and Modbus/TCP capture all proven end-to-end** (see Acceptance Gate)
-- **Last updated:** 2026-05-21
+- **Last updated:** 2026-05-22
 - **Repo:** `<repo-root>` (your local clone location; absolute path is environment-specific)
 
 ---
@@ -91,7 +91,7 @@ connection). Ready for public repo flip.
 | FUXA image | `frangoteam/fuxa:1.3.1` (pinned) | No moving `:latest`; reproducible |
 | `--privileged` | **Not** set on OpenPLC | Deliberate least-privilege; no hardware I/O in this lab |
 | `.env` file | None in Phase 1 | Fewer first-run failure modes for a beginner |
-| Zoning | `ot_zone`, `mgmt_zone`, `attacker_zone` (empty) | `attacker_zone` is the genuinely enforced boundary; Phase 2 probes it |
+| Zoning | `ot_zone`, `mgmt_zone`, `attacker_zone` | `attacker_zone` is the genuinely enforced boundary — proof landed 2026-05-22 (Phase 2 Findings §1) |
 
 ---
 
@@ -204,10 +204,67 @@ the silent drift the project rules exist to prevent.
 
 ---
 
+## Phase 2 Findings
+
+Live security findings as Phase 2 work progresses. Each finding is dated
+and tagged with the task that produced it. Pattern matches Phase 1
+network-security §5.3's "prove the boundary, then prove what crossing it
+costs" — first the boundary holds, then later tasks intentionally cross
+it to document what becomes possible.
+
+### 1. `attacker_zone` → `ot_zone` boundary holds (2026-05-22)
+
+**Source:** Phase 2 step 1 — attacker container brought up on `attacker_zone`.
+
+**Setup.** New container `otlab-attacker` attached to `attacker_zone`
+only. Inside the container: one non-loopback interface (`eth0` on
+`172.20.0.2/16` — the auto-assigned `attacker_zone` bridge), no second
+NIC, no route to `ot_zone`'s subnet. Outside: `docker inspect` confirms
+single-network attachment.
+
+**Test 1 — name resolution.** `ping openplc` from inside the attacker.
+Result: `ping: openplc: Name or service not known` (exit 2). Docker's
+embedded DNS is scoped per bridge — `openplc` is registered on
+`ot_zone`, not on `attacker_zone`, so name resolution itself fails.
+
+**Test 2 — TCP reach.** TCP knock to `openplc:502` (the Modbus port)
+from inside the attacker, with a 3-second cap:
+
+```bash
+docker exec otlab-attacker bash -c \
+  "timeout 3 bash -c '</dev/tcp/openplc/502' && echo OPEN || echo BLOCKED"
+```
+
+Result: `BLOCKED` after the 3-second timeout — no route, no peer.
+
+**Evidence quality.** Phase 1 services (`otlab-openplc`, `otlab-fuxa`)
+were running on `ot_zone` at the time of the test (5+ minutes uptime).
+The failure is therefore not "openplc was down anyway" — it is
+"openplc was alive and serving Modbus on `ot_zone`, but `attacker_zone`
+could not reach it."
+
+**Interpretation.** Docker bridge-network isolation alone is sufficient
+to prevent an `attacker_zone` container from addressing `ot_zone` — at
+both the resolution layer (DNS scoped per bridge) and the routing layer
+(no route between bridges). This is the architectural claim made in
+`docs/network-security.md` and README talking point #4, now empirically
+demonstrated.
+
+**Not yet tested (next Phase 2 task — attack scenarios).**
+
+- Reach by direct IP (cleanly removes the DNS layer from the question).
+- Positive control: same name/IP from inside `ot_zone` should succeed
+  (a container with a leg in `ot_zone` IS expected to reach openplc).
+- The set of Modbus writes that DO succeed once the boundary is
+  intentionally crossed — specifically the coil and input-register
+  write paths flagged but untested in `docs/network-security.md` §5.3.
+
+---
+
 ## Phase 2 Backlog (security operations on the Phase 1 stack — documented; not built)
 
 - [ ] Suricata passive monitoring
-- [ ] Attacker container in `attacker_zone` (ICS recon/attack tooling)
+- [x] **Attacker container in `attacker_zone`** (shipped 2026-05-22) — pinned Dockerfile on `debian:bookworm-20260518-slim` with nmap, tcpdump, curl, dig, ping, ip, pymodbus 3.6.9, scapy. Sits idle on `attacker_zone` only; reached via `docker exec`. Segmentation proof in [Phase 2 Findings §1](#phase-2-findings).
 - [ ] Historian (InfluxDB + Grafana)
 - [ ] Written-up attack scenarios
 - [ ] Real network diagram with assigned IPs

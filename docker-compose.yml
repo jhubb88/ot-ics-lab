@@ -86,6 +86,28 @@ services:
     # (ot_zone). "localhost" inside the FUXA container is FUXA itself. This
     # is the most common first-time failure; step-by-step fix in README.md.
 
+  # ---------------------------------------------------------------------------
+  # attacker — Phase 2. Sits on attacker_zone ONLY, by design.
+  # Exists to PROVE segmentation: from here, openplc on ot_zone is not
+  # reachable. That failure IS the first Phase 2 finding. Later scenarios
+  # will intentionally cross the boundary; not in this task.
+  # Built from a small pinned debian base (see attacker/Dockerfile for the
+  # supply-chain rationale — same spirit as plc/Dockerfile).
+  # Does NOT auto-run anything. `sleep infinity` keeps it alive; reach it
+  # via:  docker exec -it otlab-attacker bash
+  # ---------------------------------------------------------------------------
+  attacker:
+    build:
+      context: ./attacker
+      dockerfile: Dockerfile
+    image: ot-ics-lab/attacker:phase2-pinned   # local tag only; never pushed
+    container_name: otlab-attacker
+    restart: unless-stopped
+    networks:
+      - attacker_zone     # ONLY. No route to ot_zone — that is the point.
+    # No published ports: reached via `docker exec`, not from the host browser.
+    # No volumes: stateless; tools rebuild from the pinned Dockerfile.
+
 # -----------------------------------------------------------------------------
 # Networks — explicit zoning. This segmentation IS the point of the lab.
 # Honest scope note (expanded in docs/network-security.md): in Phase 1 both
@@ -107,10 +129,10 @@ networks:
   attacker_zone:
     name: otlab_attacker_zone
     driver: bridge
-    # DEFINED ON PURPOSE, INTENTIONALLY EMPTY IN PHASE 1. No service attached.
-    # Docker bridge networks are isolated from each other by default, so a
-    # container placed ONLY here cannot reach ot_zone — that is the boundary
-    # Phase 2's attacker container will probe. Tracked in docs/MASTER.md.
+    # Phase 2: the `attacker` service is the sole occupant. Docker bridge
+    # networks are isolated from each other by default, so a container
+    # placed ONLY here cannot reach ot_zone — that is the enforcement
+    # boundary this lab demonstrates. Full rationale in docs/MASTER.md.
 
 # -----------------------------------------------------------------------------
 # Volumes — Docker-managed persistence for OpenPLC state. Named volume (not a
