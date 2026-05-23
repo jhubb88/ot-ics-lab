@@ -164,6 +164,20 @@ can **falsify the HMI's view while actively writing**, but cannot
 **redirect the PLC's control decisions** without compromising the PLC
 program itself.
 
+**Phase 2 step 2 update (2026-05-22).** The deferred tests in this
+section have been executed empirically. All four output write FCs
+(FC 5 single coil, FC 6 single register, FC 15 multi-coil, FC 16
+multi-register) were tested against all mapped output coils (0, 1, 2)
+and output holding registers (HR 0, 1, 2). In every case the
+architectural property is identical: write accepted at the protocol
+layer, PLC reasserts within ≤1 scan. The .st program's internal
+control-state variables (`SP_Low`, `SP_High`, `Fill_Active`, `Level`)
+remain unreachable via Modbus. The refined-framing claim above —
+"observe everything, falsify the HMI's view while writing, cannot
+redirect control" — now has full empirical backing. See
+`docs/MASTER.md` Phase 2 Findings §5 for the consolidated finding
+and the per-scenario evidence under `docs/phase2/scenarios/`.
+
 ---
 
 ## 6. Attacker's view

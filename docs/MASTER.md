@@ -248,16 +248,166 @@ to prevent an `attacker_zone` container from addressing `ot_zone` — at
 both the resolution layer (DNS scoped per bridge) and the routing layer
 (no route between bridges). This is the architectural claim made in
 `docs/network-security.md` and README talking point #4, now empirically
-demonstrated.
+demonstrated. Phase 2 step 2's Step 4 verification (2026-05-22) added a
+direct-IP probe (`172.18.0.2:502` from `attacker_zone`) that also
+returned BLOCKED — the two layers are therefore independent failures,
+not a single combined one.
 
-**Not yet tested (next Phase 2 task — attack scenarios).**
+**Resolved in Phase 2 step 2 (2026-05-22).** The three deferred tests
+were executed in the attack-scenarios task:
 
-- Reach by direct IP (cleanly removes the DNS layer from the question).
-- Positive control: same name/IP from inside `ot_zone` should succeed
-  (a container with a leg in `ot_zone` IS expected to reach openplc).
-- The set of Modbus writes that DO succeed once the boundary is
-  intentionally crossed — specifically the coil and input-register
-  write paths flagged but untested in `docs/network-security.md` §5.3.
+- **Direct-IP reach** is independently blocked. Step 4 verification
+  probes `172.18.0.2:502` (openplc's ot_zone IP) from `attacker_zone`
+  and gets `BLOCKED` — same as the name-based probe. The boundary's
+  two layers (DNS scoped per bridge + inter-bridge routing absent)
+  are therefore independent failures, both confirmed.
+- **Positive control** is implicit in scenarios 1–5: once the
+  attacker is attached to `ot_zone`, everything works. The §1
+  boundary is real, not a misconfigured test environment.
+- **Modbus writes that succeed once the boundary is crossed** —
+  empirical inventory now in Findings §5 and §7. The
+  `docs/network-security.md` §5.3 scope-honesty note is fully closed
+  across all four output write FCs.
+
+### 2. `mgmt_zone` vs `ot_zone` — what's actually on the wire (2026-05-22)
+
+**Source:** Pre-flight of the Phase 2 attack-scenarios task (the
+baseline pcap surfaced this; cited in scenarios 1 and 5 setup).
+
+**Summary:** The Phase 1 architecture story frames `ot_zone` as the
+process/Modbus network. Empirically, the running FUXA↔OpenPLC Modbus
+poll rides `mgmt_zone` (172.19.0.x), not `ot_zone` (172.18.0.x). Both
+services are multi-homed; Docker's embedded DNS happened to resolve
+`openplc` to its mgmt_zone IP when FUXA opened its long-lived
+connection, and that connection has persisted on mgmt_zone since.
+`docs/network-security.md` §4's honest-scope note (mgmt_zone↔ot_zone
+is not a hard boundary) covers this; the practical consequence is
+that the legitimate poll path in this lab's current runtime state is
+mgmt_zone-only.
+
+**Implication:** Suricata sensor placement (Phase 2 backlog item)
+must choose ot_zone vs mgmt_zone vs both. ot_zone-only would miss the
+legitimate FUXA baseline; mgmt_zone-only would miss attacker traffic
+after a boundary cross. Phase 3 mgmt_zone↔ot_zone hardening also
+needs to know which network the live legitimate traffic actually
+traverses today.
+
+### 3. Recon on `ot_zone` is unimpeded; OpenPLC web UI also serves HTTPS on 8443 — a documentation-drift hardening trap (2026-05-22)
+
+**Source:** Scenario 1 — `docs/phase2/scenarios/scenario-1-recon-nmap.md`.
+
+**Summary:** nmap host discovery + service detection from an
+ot_zone-attached attacker completes in ~2 min and surfaces every
+documented service. **A previously undocumented port — openplc:8443
+— is also open**, running the same Flask/Werkzeug webserver as the
+documented :8080 OpenPLC web UI (matching `Server: Werkzeug/2.3.7
+Python/3.13.5` header, same `python3 webserver.py` PID, same
+application). HTTPS via Flask's adhoc SSL context — a second access
+path to the OpenPLC management UI. The Phase 1 host-published port
+table (`docs/network-security.md` §5.1) lists only :8080. HTTP
+listeners (8080, 1881) also leak framework + version information in
+`Server:` headers.
+
+**Implication:** **Documentation-drift hardening trap.** Phase 3
+work that tightens management access by restricting :8080 (firewall,
+network policy, mgmt_zone segregation) will leave :8443 wide open as
+an equivalent attack surface — and the Phase 1 docs give the team
+no reason to know it exists. Hardening controls on the OpenPLC
+management UI must treat 8080 + 8443 as one logical surface, or the
+second port must be documented and explicitly disabled. The generic
+pattern — *documented port set ≠ actually-listening port set* — is
+worth a fresh port-scan sanity check at the start of any Phase 3
+hardening pass, not just for OpenPLC.
+
+### 4. Modbus has no access control across all 8 FCs; out-of-map reads return silent zeros, not exceptions (2026-05-22)
+
+**Source:** Scenario 2 — `docs/phase2/scenarios/scenario-2-modbus-fc-scan.md`.
+
+**Summary:** All eight standard Modbus function codes (FC 1, 2, 3, 4,
+5, 6, 15, 16) accepted by OpenPLC v3 with no exception. Reads at
+unmapped addresses (HR 100, HR 1000, coil 100) returned silent
+zeros — **NOT** Modbus exception 02 (Illegal Data Address) as ICS
+hardening guidance leads one to expect. Out-of-map writes also
+accepted (no .st variable backs those addresses, so PLC behavior is
+unchanged).
+
+**Implication:** Directly changes the Suricata rule design for
+`docs/monitoring.md` §5 row 6 ("Reads outside the map"). The
+detection signal CANNOT be Modbus exception responses — exceptions
+never fire here. Suricata must parse address fields out of the
+Modbus PDU and compare against the documented map. This is the
+single most actionable Phase 2 finding for the Suricata work in
+step 3.
+
+### 5. §5.3 reassertion property extended to all output Modbus objects across all four write FCs (2026-05-22)
+
+**Source:** Scenarios 3, 4, 4b together —
+`docs/phase2/scenarios/scenario-3-coil-writes.md`,
+`scenario-4-hr-writes.md`, `scenario-4b-fc15-coils.md`.
+
+**Summary:** Phase 1 `docs/network-security.md` §5.3 documented the
+reassertion-every-scan property for HR 0 only and explicitly
+deferred coil writes and FC 15/16 + HR 1/HR 2 to Phase 2. All four
+output write FCs (FC 5, FC 6, FC 15, FC 16) now empirically tested
+against all mapped coils (0, 1, 2) and holding registers (1, 2).
+Architectural property is identical in every case: write accepted at
+the protocol layer, PLC overwrites within ≤1 scan (~100 ms). The
+.st program's internal `SP_Low` / `SP_High` constants — which drive
+the control loop — are NOT Modbus-mapped and remain unreachable from
+any network peer. The original task hypothesis "could redirect pump
+behavior" is empirically refuted.
+
+**Implication:** §5.3 scope-honesty note is closed. Phase 1's
+refined-framing claim — "attacker on `ot_zone` can observe
+everything and can falsify the HMI's view while actively writing,
+but cannot redirect the PLC's control decisions" — now has full
+empirical backing.
+
+### 6. Operational deception confirmed visually on the FUXA HMI (2026-05-22)
+
+**Source:** Scenario 3 — `docs/phase2/scenarios/scenario-3-coil-writes.md`;
+screenshot at `docs/img/phase2-scenario-3-alarm-write.png`.
+
+**Summary:** During a 3-second FC 5 burst writing TRUE to the alarm
+coil, FUXA's HMI rendered the falsified state visibly — tank at 72 %
+with the Alarm indicator ACTIVE (red), well below the 90 % alarm
+threshold. FUXA's ~1 Hz polling caught a between-scan window where
+the attacker's write was the most recent value. An operator
+monitoring this HMI would respond to a phantom alarm — the attack
+creates real-world impact (investigation, possible process halt,
+loss of trust in indicator) without changing actual plant behavior.
+
+**Implication:** The detection signal at this layer must be
+**source IP + FC**, not state. A rule that watches the coil's
+*value* will see legitimate alarm activations and cannot distinguish
+them from this attack. `docs/monitoring.md` §5 row 2 (new source IP
+to :502) is the right primitive. Scenario 4's HR-write equivalent is
+the same class but not visually demonstrated because the current HMI
+does not display SP_Low / SP_High (tracked in Open Items as HMI
+polish).
+
+### 7. Modbus has no authentication and no integrity protection (2026-05-22)
+
+**Source:** Scenario 5 — `docs/phase2/scenarios/scenario-5-modbus-replay.md`.
+
+**Summary:** Two independent demonstrations from one captured PDU.
+**(1) No authentication:** verbatim replay of a captured FUXA poll
+(TID 0x00a3) from the attacker's source IP produced a normal PLC
+response with the original TID echoed — the PLC cannot distinguish
+the replay from a legitimate request. **(2) No integrity:** a
+three-byte mutation of the same captured PDU (FC 3 → FC 6, address
+and value bytes reinterpreted) turned a read into a write to HR 1;
+the PLC accepted the mutated request and acknowledged the write.
+The §5.3 reassertion wall still applied — the falsified value was
+overwritten within ~1 scan.
+
+**Implication:** Strengthens the §6 detection conclusion — payload
+content (TID, FC, address, value) is freely mutable on the wire, so
+no payload-content-based Suricata signal can distinguish attacker
+traffic from a clever replay. Source IP + FC is the only signal
+that works. Defense at the protocol layer is therefore
+**segmentation + behavioral detection**, not Modbus hardening
+(which the protocol does not support).
 
 ---
 
@@ -266,7 +416,15 @@ demonstrated.
 - [ ] Suricata passive monitoring
 - [x] **Attacker container in `attacker_zone`** (shipped 2026-05-22) — pinned Dockerfile on `debian:bookworm-20260518-slim` with nmap, tcpdump, curl, dig, ping, ip, pymodbus 3.6.9, scapy. Sits idle on `attacker_zone` only; reached via `docker exec`. Segmentation proof in [Phase 2 Findings §1](#phase-2-findings).
 - [ ] Historian (InfluxDB + Grafana)
-- [ ] Written-up attack scenarios
+- [x] **Written-up attack scenarios** (shipped 2026-05-22) — five
+  scenarios executed against the live stack from an ot_zone-attached
+  attacker; six new findings logged (§2–§7 above). Per-scenario
+  evidence in `docs/phase2/scenarios/*.md`; capture artifacts
+  gitignored in `captures/`. Operational follow-up: add `procps` to
+  `plc/Dockerfile` and `attacker/Dockerfile` so `pkill` is available
+  without runtime install (currently installed at runtime per
+  `docs/monitoring.md` §3 Method B; baked-in install removes the
+  container-recreation loss step).
 - [ ] Real network diagram with assigned IPs
 
 ---
