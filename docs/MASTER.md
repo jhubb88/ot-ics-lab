@@ -9,7 +9,7 @@ of the deliverable, not just the plumbing.
 - **Process simulated:** Generic plant tank-fill (level, pump, valve, high alarm)
 - **Phase:** 1 of 3 (Phase 1 complete; Phase 2 = security work on v3, Phase 3 = platform migration + zone hardening)
 - **Phase 1 status:** **Acceptance gate fully met — runtime, visual HMI, and Modbus/TCP capture all proven end-to-end** (see Acceptance Gate)
-- **Last updated:** 2026-05-22
+- **Last updated:** 2026-05-23
 - **Repo:** `<repo-root>` (your local clone location; absolute path is environment-specific)
 
 ---
@@ -92,6 +92,7 @@ connection). Ready for public repo flip.
 | `--privileged` | **Not** set on OpenPLC | Deliberate least-privilege; no hardware I/O in this lab |
 | `.env` file | None in Phase 1 | Fewer first-run failure modes for a beginner |
 | Zoning | `ot_zone`, `mgmt_zone`, `attacker_zone` | `attacker_zone` is the genuinely enforced boundary — proof landed 2026-05-22 (Phase 2 Findings §1) |
+| Suricata capabilities | `NET_ADMIN` + `NET_RAW` only (intentionally no `SYS_NICE`) | Permits `:ro` bind mounts on rules + config (supply-chain control: Suricata cannot tamper with its own ruleset at runtime even if compromised). Trade: cosmetic "running as root" startup warning, accepted — root inside a non-privileged container with no host access is not a security issue |
 
 ---
 
@@ -192,6 +193,15 @@ the silent drift the project rules exist to prevent.
   Desktop's memory limit first, or `docker compose stop` the existing stack
   to give the new image headroom — resilience to a forced shutdown is not
   a license to invite one.
+- 2026-05-23 — Verifying CLI flags against `--help` before using
+  non-canonical long forms saves a failed run. Suricata accepts only
+  `-l <dir>` for log directory; `--log-dir` is not exposed as a long alias.
+  My initial replay used `--log-dir` — Suricata's parser silently ignored
+  the unknown flag, fell through to help text, exited 0; output dir was
+  never created and eve.json was never produced. Process improvement: for
+  any tool where the short form is the documented standard, run
+  `<tool> --help | grep -i <option-name>` before using the assumed long
+  form. Discipline applies broadly, not just to Suricata.
 
 ---
 
@@ -409,11 +419,65 @@ that works. Defense at the protocol layer is therefore
 **segmentation + behavioral detection**, not Modbus hardening
 (which the protocol does not support).
 
+### 8. Suricata rate-threshold rules are inherently non-deterministic under multi-threaded evaluation (2026-05-23)
+
+**Source:** Phase 2 sub-session 3a (Suricata recon detection) —
+`docs/phase2/detection/3a-recon-detection.md`. Evidence preserved at
+`suricata/logs/replay-3a-verify-3/eve.json` (gitignored; local-only).
+
+**Summary:** Suricata's threshold-mode rules (`threshold: type both, track
+by_src, count N, seconds W`) produce non-deterministic alert counts when
+running over the same input pcap under multi-threaded evaluation. SID
+9000002 (TCP SYN scan rate threshold, `count 10, seconds 10`) was replayed
+five times against the same scenario-1 pcap with no rule changes:
+
+| Run | 9000002 alerts | 9000002 timestamps |
+|---|---|---|
+| baseline (b7d9661) | 3 | 18:04:54.946 · 18:05:22.045 · 18:05:33.102 |
+| verify (run 1)     | 2 | 18:05:45.276 · 18:06:05.317 |
+| verify-2 (run 2)   | 3 | 18:04:54.872 · 18:05:33.100 · 18:06:10.387 |
+| verify-3 (run 3)   | 3 | 18:04:54.522 · 18:05:24.903 · 18:05:24.875 |
+| verify-4 (run 4)   | 2 | 18:04:54.523 · 18:05:17.372 |
+
+Counts oscillate 3, 2, 3, 3, 2 (3/5 fire three alerts; 2/5 fire two).
+**Timestamps shift across runs even when the count matches the baseline**
+— same input, same rules, but different trigger points each time.
+
+**Smoking-gun evidence within a single run:** run 3 fires 9000002 at
+`18:05:24.903909` and `18:05:24.875207` — **28 milliseconds apart**, both
+from the same source IP, both within the 10-second `track by_src`
+suppression window the rule's `type both` mode is supposed to enforce.
+Two alerts firing 28 ms apart from the same source proves Suricata's
+threshold-suppression state machine has a race condition under
+multi-threaded evaluation. The engine reports
+`Threads created -> RX: 1 W: 12 FM: 1 FR: 1` — 12 worker threads racing
+on the shared threshold state.
+
+**ICS-detection-design implication:** rate-threshold rules are not
+suitable as a sole detection signal where exact-count semantics matter
+(compliance reporting, forensic reconstruction, alert-dedup contracts).
+Cumulative flow tracking — counting unique destinations per source over
+a long window, without sub-second window arithmetic — is the more robust
+primitive for the same indicator class. It doesn't depend on per-thread
+state synchronization and doesn't suffer window-edge jitter.
+
+**Forward link:** sub-session 3b/3c will redesign port-scan and
+connection-churn detection around flow-based primitives instead of rate
+thresholds. Cross-referenced in `docs/phase2/detection/3a-recon-detection.md`
+SID 9000002 discussion.
+
 ---
 
 ## Phase 2 Backlog (security operations on the Phase 1 stack — documented; not built)
 
-- [ ] Suricata passive monitoring
+- [ ] **Suricata passive monitoring** — sub-session 3a (recon detection)
+  shipped 2026-05-23. Suricata 8.0.5 multi-homed on ot_zone + mgmt_zone;
+  5-rule recon-detection ruleset (SIDs 9000001–9000005) validated via
+  offline pcap replay against scenario-1's pcap — 3/5 SIDs fired with
+  full evidence; 2 non-firing SIDs documented as findings, not failures.
+  Full write-up in `docs/phase2/detection/3a-recon-detection.md`.
+  Sub-sessions 3b (Modbus protocol parsing) and 3c (replay attack
+  detection) remaining; each is its own sub-session.
 - [x] **Attacker container in `attacker_zone`** (shipped 2026-05-22) — pinned Dockerfile on `debian:bookworm-20260518-slim` with nmap, tcpdump, curl, dig, ping, ip, pymodbus 3.6.9, scapy. Sits idle on `attacker_zone` only; reached via `docker exec`. Segmentation proof in [Phase 2 Findings §1](#phase-2-findings).
 - [ ] Historian (InfluxDB + Grafana)
 - [x] **Written-up attack scenarios** (shipped 2026-05-22) — five
