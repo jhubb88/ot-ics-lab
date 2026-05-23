@@ -1,0 +1,75 @@
+# =============================================================================
+# OT/ICS Security Lab — Phase 2 step 3a local rules
+#
+# Recon-detection ruleset (5 rules) targeting the traffic Phase 2 scenario 1
+# generated: nmap host discovery + TCP connect-scan + service-version probes.
+# SID range 9000000–9000999 reserved for this lab's local rules.
+#
+# Mode: IDS (alert only). No drops, no flow modification.
+#
+# Cross-references:
+#   docs/phase2/scenarios/scenario-1-recon-nmap.md   (attack)
+#   docs/monitoring.md §5                            (indicator table)
+#   docs/MASTER.md Phase 2 Findings §3               (recon finding)
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# 9000001 — ICMP echo-request burst from a single source.
+# Trigger: 5 or more ICMP echo-requests from one src in a 10-second window.
+# Why: nmap -sn (host discovery) sends ICMP echo-request to every address
+#      in the target range. The lab's normal baseline has zero ICMP traffic
+#      so any burst is anomalous. 5/10s threshold tolerates ad-hoc ping
+#      checks while flagging sweeps.
+# -----------------------------------------------------------------------------
+alert icmp any any -> $HOME_NET any (msg:"OTLAB-RECON ICMP echo-request sweep (host discovery)"; itype:8; threshold: type both, track by_src, count 5, seconds 10; classtype:network-scan; sid:9000001; rev:1;)
+
+# -----------------------------------------------------------------------------
+# 9000002 — TCP SYN burst from a single source.
+# Trigger: 10 or more TCP SYN packets from one src in 10 seconds.
+# Why: nmap -sT (connect scan) opens a full TCP handshake to each probed
+#      port. Even on a small target set (2 hosts x 8 ports = 16 probes),
+#      that crosses 10/10s easily. Legitimate baseline (one long-lived
+#      FUXA→openplc connection) generates zero new SYNs after startup.
+# -----------------------------------------------------------------------------
+alert tcp any any -> $HOME_NET any (msg:"OTLAB-RECON TCP SYN scan (rate threshold)"; flags:S; threshold: type both, track by_src, count 10, seconds 10; classtype:network-scan; sid:9000002; rev:1;)
+
+# -----------------------------------------------------------------------------
+# 9000003 — Modbus :502 contact from a non-FUXA source.
+# Trigger: any TCP SYN to OpenPLC's Modbus port from a src NOT equal to
+#      the pinned FUXA address.
+# Why: docs/monitoring.md §5 row 2 — "Only FUXA should talk to the PLC."
+#      An attacker on ot_zone trying to reach Modbus is detected on the
+#      first SYN. Also catches host-side pymodbus tooling (per §5 row 2
+#      definition; intentional).
+# -----------------------------------------------------------------------------
+alert tcp !$FUXA_IP any -> $OPENPLC_IP $MODBUS_PORT (msg:"OTLAB-RECON TCP SYN to Modbus :502 from non-FUXA source"; flags:S; classtype:network-scan; sid:9000003; rev:1;)
+
+# -----------------------------------------------------------------------------
+# 9000004 — OpenPLC web UI contact from a source that is NOT host-NAT'd
+#           operator traffic.
+# Trigger: TCP SYN to OpenPLC web ports (8080 or 8443) from any source IP
+#      that is not one of the bridge-gateway addresses (172.18.0.1 /
+#      172.19.0.1). Host-side browser access from the Windows operator
+#      arrives at the container post-NAT with the bridge gateway as the
+#      source IP — that's the only legitimate path to the web UI in this
+#      lab. Anything else hitting 8080/8443 is a container-on-bridge
+#      talking to OpenPLC's web UI, which no container should be doing
+#      in normal operation. The lab's containers are FUXA (Modbus only,
+#      doesn't speak HTTP to openplc), openplc itself, the attacker
+#      (when boundary-crossed), and Suricata (passive).
+# Why: Direct tie to Phase 2 Finding §3 (the documentation-drift
+#      hardening trap). Rule covers BOTH 8080 and 8443 — Phase 1 docs
+#      only listed 8080, so a Phase-3 firewall on 8080 would miss 8443;
+#      this rule catches recon hitting either port.
+# -----------------------------------------------------------------------------
+alert tcp !$MGMT_OPERATOR any -> $OPENPLC_IP $OPENPLC_WEB_PORTS (msg:"OTLAB-RECON TCP SYN to OpenPLC web UI from non-operator source"; flags:S; classtype:attempted-recon; sid:9000004; rev:1;)
+
+# -----------------------------------------------------------------------------
+# 9000005 — TCP RST burst from a single source (connection-churn signature).
+# Trigger: 15 or more RST packets from one src in 10 seconds.
+# Why: nmap connect-scan (-sT) closes each probed socket immediately,
+#      producing RSTs both from closed-port responses and from the scanner
+#      tearing down established sockets. A burst of RSTs from one src is
+#      the classic port-scan churn signature (docs/monitoring.md §5 row 5).
+# -----------------------------------------------------------------------------
+alert tcp any any -> $HOME_NET any (msg:"OTLAB-RECON TCP RST connection-churn (scan signature)"; flags:R; threshold: type both, track by_src, count 15, seconds 10; classtype:network-scan; sid:9000005; rev:1;)

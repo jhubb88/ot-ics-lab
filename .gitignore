@@ -25,3 +25,9 @@ Thumbs.db
 *.swp
 .vscode/
 .idea/
+
+# --- Suricata runtime logs -------------------------------------------------
+# eve.json + fast.log + stats.log + suricata.log are live IDS output, not
+# source. Keep the directory via .gitkeep; ignore the contents.
+suricata/logs/*
+!suricata/logs/.gitkeep

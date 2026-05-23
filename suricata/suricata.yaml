@@ -1,0 +1,118 @@
+%YAML 1.1
+---
+# =============================================================================
+# OT/ICS Security Lab — Phase 2 step 3a Suricata config
+#
+# Minimal Suricata 8.x config tuned for this lab. Most upstream defaults
+# are fine; the sections here override only the few that matter for a
+# 512MB-limit container running 5 local rules on a low-traffic OT lab.
+#
+# Reference paths (inside the container, set by docker-compose bind mounts):
+#   /etc/suricata/suricata.yaml   this file
+#   /etc/suricata/rules/          rules dir (local.rules)
+#   /var/log/suricata/            output (eve.json, fast.log, stats.log)
+#   /captures/                    read-only access to lab pcaps (for -r mode)
+# =============================================================================
+
+vars:
+  address-groups:
+    # Lab address spaces
+    HOME_NET: "[172.18.0.0/16,172.19.0.0/16,172.20.0.0/16]"
+    EXTERNAL_NET: "!$HOME_NET"
+    # Named hosts — pinned via docker-compose ipv4_address
+    FUXA_IP: "[172.18.0.3,172.19.0.3]"
+    OPENPLC_IP: "[172.18.0.2,172.19.0.2]"
+    # Operator-management sources (bridge gateways serve host-side traffic
+    # post-NAT — host browser to openplc:8080 arrives from .1 on each net)
+    MGMT_OPERATOR: "[172.18.0.1,172.19.0.1]"
+
+  port-groups:
+    MODBUS_PORT: "502"
+    OPENPLC_WEB_PORTS: "[8080,8443]"
+    FUXA_HMI_PORT: "1881"
+
+default-rule-path: /etc/suricata/rules
+rule-files:
+  - local.rules
+
+default-log-dir: /var/log/suricata
+
+outputs:
+  - fast:
+      enabled: yes
+      filename: fast.log
+      append: yes
+
+  - eve-log:
+      enabled: yes
+      filetype: regular
+      filename: eve.json
+      rotate-interval: day
+      types:
+        - alert:
+            metadata: yes
+        - http:
+            extended: no
+        - flow
+        - stats:
+            interval: 60
+
+  - stats:
+      enabled: yes
+      filename: stats.log
+      interval: 60
+
+logging:
+  default-log-level: notice
+  outputs:
+    - console:
+        enabled: yes
+    - file:
+        enabled: yes
+        filename: suricata.log
+
+af-packet:
+  - interface: eth0
+    cluster-id: 99
+    cluster-type: cluster_flow
+    defrag: yes
+    use-mmap: yes
+    tpacket-v3: yes
+  - interface: eth1
+    cluster-id: 98
+    cluster-type: cluster_flow
+    defrag: yes
+    use-mmap: yes
+    tpacket-v3: yes
+
+# Memcap sizes — tuned conservatively for the 512MB mem_limit on a
+# low-traffic OT lab. Total memcap budget ~64MB; remaining ~448MB
+# headroom covers binary, libraries, rule tree, kernel buffers.
+stream:
+  memcap: 16mb
+  checksum-validation: yes
+  inline: no
+  reassembly:
+    memcap: 32mb
+    depth: 1mb
+
+flow:
+  memcap: 16mb
+  hash-size: 32768
+  prealloc: 1000
+  emergency-recovery: 30
+
+app-layer:
+  protocols:
+    http:
+      enabled: yes
+    tls:
+      enabled: no
+    smb:
+      enabled: no
+    ssh:
+      enabled: no
+    ftp:
+      enabled: no
+    # Modbus parser stays at upstream default (off). Sub-session 3b
+    # will enable it for protocol-aware rules.

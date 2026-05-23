@@ -1,6 +1,8 @@
 # =============================================================================
-# OT/ICS Security Lab — Phase 1
-# 2 services only. 3 networks (attacker_zone defined but EMPTY in Phase 1).
+# OT/ICS Security Lab — Phase 1 + Phase 2
+# 3 services (Phase 1) + 1 attacker (step 1) + 1 Suricata sensor (step 3a).
+# 3 networks. Static IPs pinned for openplc + fuxa so the IDS ruleset has
+# stable reference addresses.
 #
 # No top-level `version:` key on purpose — Docker Compose v2 deprecated it.
 # WSL2 + Docker Desktop reminder (full detail in README.md):
@@ -14,6 +16,9 @@ services:
   # openplc — the PLC. Runs the tank-fill control logic and serves Modbus/TCP.
   # Built from PINNED official upstream source (see plc/Dockerfile for the full
   # supply-chain rationale — that "why" is part of the recruiter story).
+  #
+  # Phase 2 step 3a — IPs pinned (ipv4_address) so Suricata rules referencing
+  # $OPENPLC_IP and $FUXA_IP have stable targets across restarts.
   # ---------------------------------------------------------------------------
   openplc:
     build:
@@ -23,8 +28,10 @@ services:
     container_name: otlab-openplc
     restart: unless-stopped
     networks:
-      - ot_zone      # process/control network — Modbus/TCP lives here
-      - mgmt_zone    # human reaches the OpenPLC web editor from a browser
+      ot_zone:
+        ipv4_address: 172.18.0.2
+      mgmt_zone:
+        ipv4_address: 172.19.0.2
     ports:
       # KNOWN GOTCHA — OpenPLC exposes TWO DIFFERENT ports:
       #
@@ -59,6 +66,9 @@ services:
   # ---------------------------------------------------------------------------
   # fuxa — the HMI. The screen an operator looks at. Talks Modbus/TCP to
   # OpenPLC and renders tank level / pump / valve / alarm.
+  #
+  # Phase 2 step 3a — IPs pinned (ipv4_address) so Suricata's $FUXA_IP
+  # variable resolves to a stable address across restarts.
   # ---------------------------------------------------------------------------
   fuxa:
     image: frangoteam/fuxa:1.3.1            # verified real tag; no moving "latest"
@@ -67,8 +77,10 @@ services:
     depends_on:
       - openplc
     networks:
-      - ot_zone      # reach OpenPLC's Modbus across the OT network
-      - mgmt_zone    # open the FUXA HMI in a browser
+      ot_zone:
+        ipv4_address: 172.18.0.3
+      mgmt_zone:
+        ipv4_address: 172.19.0.3
     ports:
       #   1881  FUXA HMI web UI (human, browser)
       #         WSL2: open http://localhost:1881 in the *Windows* browser.
@@ -108,27 +120,84 @@ services:
     # No published ports: reached via `docker exec`, not from the host browser.
     # No volumes: stateless; tools rebuild from the pinned Dockerfile.
 
+  # ---------------------------------------------------------------------------
+  # suricata — Phase 2 step 3a. Passive IDS sensor.
+  #
+  # Multi-homed on ot_zone + mgmt_zone (per Phase 2 Finding §2 — legitimate
+  # FUXA↔OpenPLC poll rides mgmt_zone; attacker traffic from a boundary-
+  # crossed attacker rides ot_zone; sensor needs both).
+  #
+  # IDS mode (alert only, no drops). Live-capture via af-packet on eth0/eth1.
+  # Docker bridge MAC-learning limits what a passive sensor sees live (it
+  # gets broadcasts + own traffic only); for sub-session 3a this is fine —
+  # the verification mechanism is offline pcap replay via
+  #   docker exec otlab-suricata suricata -r /captures/<file>.pcap ...
+  # Sub-sessions 3b and 3c will revisit live-capture if needed.
+  #
+  # mem_limit: 512m — hard cap to prevent OOM-kill of Phase 1 services on
+  # WSL2 (documented gotcha). Suricata memcaps in suricata.yaml are sized
+  # conservatively (16+32+16 = 64MB total) to fit comfortably under this.
+  # ---------------------------------------------------------------------------
+  suricata:
+    image: jasonish/suricata:8.0.5
+    container_name: otlab-suricata
+    restart: unless-stopped
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    mem_limit: 512m
+    networks:
+      - ot_zone
+      - mgmt_zone
+    volumes:
+      - ./suricata/suricata.yaml:/etc/suricata/suricata.yaml:ro
+      - ./suricata/rules:/etc/suricata/rules:ro
+      - ./suricata/logs:/var/log/suricata
+      - ./captures:/captures:ro
+    command:
+      - "-c"
+      - "/etc/suricata/suricata.yaml"
+      - "-i"
+      - "eth0"
+      - "-i"
+      - "eth1"
+
 # -----------------------------------------------------------------------------
 # Networks — explicit zoning. This segmentation IS the point of the lab.
 # Honest scope note (expanded in docs/network-security.md): in Phase 1 both
 # legitimate services are multi-homed on ot_zone + mgmt_zone for usability.
 # The real, demonstrable enforcement boundary is attacker_zone, which is an
 # isolated bridge with no route to ot_zone.
+#
+# Phase 2 step 3a — subnets + gateways pinned via ipam.config so the
+# ipv4_address assignments above take effect deterministically.
 # -----------------------------------------------------------------------------
 networks:
   ot_zone:
     name: otlab_ot_zone
     driver: bridge
+    ipam:
+      config:
+        - subnet: 172.18.0.0/16
+          gateway: 172.18.0.1
     # "Plant floor" / process network. Modbus/TCP between HMI and PLC.
 
   mgmt_zone:
     name: otlab_mgmt_zone
     driver: bridge
+    ipam:
+      config:
+        - subnet: 172.19.0.0/16
+          gateway: 172.19.0.1
     # "Engineering / management" network. Human web access to the UIs.
 
   attacker_zone:
     name: otlab_attacker_zone
     driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
+          gateway: 172.20.0.1
     # Phase 2: the `attacker` service is the sole occupant. Docker bridge
     # networks are isolated from each other by default, so a container
     # placed ONLY here cannot reach ot_zone — that is the enforcement
