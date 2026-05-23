@@ -42,7 +42,7 @@ alert tcp any any -> $HOME_NET any (msg:"OTLAB-RECON TCP SYN scan (rate threshol
 #      first SYN. Also catches host-side pymodbus tooling (per §5 row 2
 #      definition; intentional).
 # -----------------------------------------------------------------------------
-alert tcp !$FUXA_IP any -> $OPENPLC_IP $MODBUS_PORT (msg:"OTLAB-RECON TCP SYN to Modbus :502 from non-FUXA source"; flags:S; classtype:network-scan; sid:9000003; rev:1;)
+alert tcp !$FUXA_IP any -> $OPENPLC_IP $MODBUS_PORT (msg:"OTLAB-RECON TCP SYN to Modbus :502 from non-FUXA source"; flow:not_established,to_server; flags:S; classtype:network-scan; sid:9000003; rev:2;)
 
 # -----------------------------------------------------------------------------
 # 9000004 — OpenPLC web UI contact from a source that is NOT host-NAT'd
@@ -62,7 +62,7 @@ alert tcp !$FUXA_IP any -> $OPENPLC_IP $MODBUS_PORT (msg:"OTLAB-RECON TCP SYN to
 #      only listed 8080, so a Phase-3 firewall on 8080 would miss 8443;
 #      this rule catches recon hitting either port.
 # -----------------------------------------------------------------------------
-alert tcp !$MGMT_OPERATOR any -> $OPENPLC_IP $OPENPLC_WEB_PORTS (msg:"OTLAB-RECON TCP SYN to OpenPLC web UI from non-operator source"; flags:S; classtype:attempted-recon; sid:9000004; rev:1;)
+alert tcp !$MGMT_OPERATOR any -> $OPENPLC_IP $OPENPLC_WEB_PORTS (msg:"OTLAB-RECON TCP SYN to OpenPLC web UI from non-operator source"; flow:not_established,to_server; flags:S; classtype:attempted-recon; sid:9000004; rev:2;)
 
 # -----------------------------------------------------------------------------
 # 9000005 — TCP RST burst from a single source (connection-churn signature).

@@ -147,8 +147,10 @@ services:
       - NET_RAW
     mem_limit: 512m
     networks:
-      - ot_zone
-      - mgmt_zone
+      ot_zone:
+        ipv4_address: 172.18.0.4
+      mgmt_zone:
+        ipv4_address: 172.19.0.4
     volumes:
       - ./suricata/suricata.yaml:/etc/suricata/suricata.yaml:ro
       - ./suricata/rules:/etc/suricata/rules:ro
