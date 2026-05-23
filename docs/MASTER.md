@@ -202,6 +202,13 @@ the silent drift the project rules exist to prevent.
   any tool where the short form is the documented standard, run
   `<tool> --help | grep -i <option-name>` before using the assumed long
   form. Discipline applies broadly, not just to Suricata.
+- The discipline above is codified as a user-level Claude Code skill at
+  `~/.claude/skills/verifying-cli-flags/SKILL.md` — triggers when about to
+  use a long-form CLI flag (`--flag`) not yet confirmed in this project's
+  history or the tool's `--help` output. Portable across projects (lives
+  in user-level config, not the repo). RED-phase tested 2026-05-23 against
+  two subagent scenarios; skill fired correctly on iptables long-form flag,
+  stayed silent on a canonical git command.
 
 ---
 
