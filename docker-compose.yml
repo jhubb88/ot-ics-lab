@@ -97,6 +97,19 @@ services:
     # Containers reach each other by service name on a shared network
     # (ot_zone). "localhost" inside the FUXA container is FUXA itself. This
     # is the most common first-time failure; step-by-step fix in README.md.
+    # Healthcheck — detect silent Modbus client drops. FUXA 1.3.1's ModbusTCP
+    # driver has no auto-reconnect; when the connection silently dies the HMI
+    # freezes without logging. Probe: /proc/net/tcp inside the container for
+    # an ESTABLISHED conn (state 01) to openplc:502 on either bridge IP.
+    # Hex: 020013AC=172.19.0.2 (mgmt), 020012AC=172.18.0.2 (ot); 01F6=502.
+    # On unhealthy: `docker compose up -d --force-recreate fuxa`.
+    # Investigation: docs/phase2/detection/3b-modbus-protocol.md (held items).
+    healthcheck:
+      test: ["CMD-SHELL", "awk '$4==\"01\" && ($3==\"020013AC:01F6\" || $3==\"020012AC:01F6\")' /proc/net/tcp | grep -q ."]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 90s
 
   # ---------------------------------------------------------------------------
   # attacker — Phase 2. Sits on attacker_zone ONLY, by design.
