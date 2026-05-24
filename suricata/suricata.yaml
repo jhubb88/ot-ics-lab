@@ -114,5 +114,14 @@ app-layer:
       enabled: no
     ftp:
       enabled: no
-    # Modbus parser stays at upstream default (off). Sub-session 3b
-    # will enable it for protocol-aware rules.
+    # Modbus parser enabled in step 3b for protocol-aware rules
+    # (SIDs 9000010–9000015). Default port 502; stream-depth 0 = unlimited
+    # reassembly per upstream Modbus Messaging on TCP/IP guide V1.0b
+    # (Modbus connections are long-lived). request-flood detection left
+    # disabled — rate thresholds are non-deterministic under multi-threaded
+    # eval (Phase 2 Finding §8).
+    modbus:
+      enabled: yes
+      detection-ports:
+        dp: 502
+      stream-depth: 0

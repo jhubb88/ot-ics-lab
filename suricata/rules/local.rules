@@ -73,3 +73,115 @@ alert tcp !$MGMT_OPERATOR any -> $OPENPLC_IP $OPENPLC_WEB_PORTS (msg:"OTLAB-RECO
 #      the classic port-scan churn signature (docs/monitoring.md §5 row 5).
 # -----------------------------------------------------------------------------
 alert tcp any any -> $HOME_NET any (msg:"OTLAB-RECON TCP RST connection-churn (scan signature)"; flags:R; threshold: type both, track by_src, count 15, seconds 10; classtype:network-scan; sid:9000005; rev:1;)
+
+# =============================================================================
+# Phase 2 step 3b — Modbus protocol-aware detection (SIDs 9000010–9000015)
+#
+# Added 2026-05-24. Rules use Suricata's modbus app-layer keyword (verified
+# against upstream 8.0.5 docs). All rules are protocol-aware and
+# deterministic — no rate thresholds (per Finding §8).
+#
+# Coverage:
+#   - 9000010, 9000011: baseline-unused FCs (FC 2, FC 4) — recon signal
+#   - 9000012, 9000013: write to coils/HRs from non-FUXA source (any
+#                       address — no legitimate writer exists)
+#   - 9000014, 9000015: read outside documented map (address >= 3)
+#
+# Map cutoffs verified against plc/tank_fill.st:
+#   - Coils 0,1,2 = Pump_Run, Valve_Open, High_Alarm
+#   - HR 0,1,2 = Level_PV, SP_Low_Out, SP_High_Out
+#   - Out-of-map = address >2 (per Finding §4: silent zeros, not exception 02)
+#
+# Cross-references:
+#   docs/phase2/scenarios/scenario-{2,3,4,4b}-*.md  (attacks)
+#   docs/monitoring.md §5 rows 1, 3, 6              (indicators)
+#   docs/MASTER.md Phase 2 Findings §4, §6, §8      (design constraints)
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# 9000010 — Modbus Read Discrete Inputs (FC 2) from any source.
+# Trigger: any FC 2 PDU to OpenPLC:502.
+# Why: monitoring.md §4 baseline = FC 1 + FC 3 only. FC 2 has zero
+#      legitimate use in this lab — any FC 2 = recon / FC enumeration.
+# Keyword: modbus app-layer (function 2). Deterministic.
+# -----------------------------------------------------------------------------
+alert tcp any any -> $OPENPLC_IP $MODBUS_PORT (msg:"OTLAB-MODBUS Read Discrete Inputs (FC 2) — not used by baseline"; flow:to_server,established; modbus: function 2; classtype:protocol-command-decode; sid:9000010; rev:1;)
+
+# -----------------------------------------------------------------------------
+# 9000011 — Modbus Read Input Registers (FC 4) from any source.
+# Trigger: any FC 4 PDU to OpenPLC:502.
+# Why: same baseline-violation logic as 9000010. .st declares no input
+#      registers; FUXA never reads FC 4.
+# Keyword: modbus app-layer (function 4). Deterministic.
+# -----------------------------------------------------------------------------
+alert tcp any any -> $OPENPLC_IP $MODBUS_PORT (msg:"OTLAB-MODBUS Read Input Registers (FC 4) — not used by baseline"; flow:to_server,established; modbus: function 4; classtype:protocol-command-decode; sid:9000011; rev:1;)
+
+# -----------------------------------------------------------------------------
+# 9000012 — Modbus write to coil (FC 5/15) from non-FUXA source.
+# Trigger: any FC 5 (write single coil) or FC 15 (write multiple coils)
+#      PDU from a source IP that is NOT FUXA.
+# Why: monitoring.md §5 row 1 — no legitimate writer exists in this lab.
+#      Address is not the signal; the combination of source-IP + write-class
+#      IS. Mapped coils 0,1,2 (Pump/Valve/Alarm) are the operational-
+#      deception target (Finding §6: alarm-coil falsification produces
+#      phantom HMI alarm). Writes to unmapped coils are protocol-surface
+#      enumeration recon — also worth flagging. The msg groups FC 5 + FC 15
+#      since the security signal is identical; the pcap distinguishes them
+#      for forensics.
+# Keyword: modbus app-layer (access write coils, no address filter).
+#      Suricata 8.0.5 modbus keyword's address <N comparator on access
+#      write rules is silently off-by-one (matches <(N-1)). Address
+#      filtering on writes dropped in favor of source-IP + write-class
+#      as the robust primitive. Full investigation in
+#      docs/phase2/detection/3b-modbus-protocol.md.
+# -----------------------------------------------------------------------------
+alert tcp !$FUXA_IP any -> $OPENPLC_IP $MODBUS_PORT (msg:"OTLAB-MODBUS Write to coil from non-FUXA source"; flow:to_server,established; modbus: access write coils; classtype:attempted-admin; sid:9000012; rev:3;)
+
+# -----------------------------------------------------------------------------
+# 9000013 — Modbus write to holding register (FC 6/16) from non-FUXA source.
+# Trigger: any FC 6 (write single register) or FC 16 (write multiple
+#      registers) PDU from a source IP that is NOT FUXA.
+# Why: monitoring.md §5 row 1 + Phase 1 §5.3 (HR writes accepted, PLC
+#      reasserts every scan). HR 0,1,2 = Level / SP_Low_Out / SP_High_Out;
+#      falsifying corrupts HMI display but PLC control unaffected (internal
+#      SP_Low / SP_High live outside Modbus map). Writes to unmapped
+#      registers are protocol-surface enumeration — also flagged. Address
+#      is not the signal; source-IP + write-class IS.
+# Keyword: modbus app-layer (access write holding, no address filter).
+#      See 9000012 for the off-by-one investigation that motivated
+#      dropping the address sub-option.
+# -----------------------------------------------------------------------------
+alert tcp !$FUXA_IP any -> $OPENPLC_IP $MODBUS_PORT (msg:"OTLAB-MODBUS Write to holding register from non-FUXA source"; flow:to_server,established; modbus: access write holding; classtype:attempted-admin; sid:9000013; rev:3;)
+
+# -----------------------------------------------------------------------------
+# 9000014 — Modbus read of coil where read range overlaps OUT-OF-MAP space.
+# Trigger: FC 1 (Read Coils) where any address in the read range falls in
+#      3..65535 (i.e. the read touches at least one unmapped coil). Any src.
+# Why: monitoring.md §5 row 6 (reads outside the map). Per Finding §4,
+#      OpenPLC returns silent zeros (not exception 02) for out-of-map
+#      reads — exception-watching is dead; address inspection only. NOT
+#      source-IP filtered: FUXA drifting outside the map is also a useful
+#      (config-drift) signal. Boundary-crossing reads (e.g. read addr=0
+#      qty=6 spans coils 0..5, includes unmapped 3,4,5) are correctly
+#      flagged — an attacker enumerating beyond the map.
+# Keyword: modbus app-layer (access read coils, address 3<>65535).
+#      Suricata 8.0.5 modbus keyword: address X<>Y matches if ANY address
+#      in the read range falls in [X,Y]. Comparator forms (>N, <N) were
+#      empirically found to no-op-match-all on read rules; range form is
+#      the working option.
+# -----------------------------------------------------------------------------
+alert tcp any any -> $OPENPLC_IP $MODBUS_PORT (msg:"OTLAB-MODBUS Read coil range overlaps out-of-map (>=3)"; flow:to_server,established; modbus: access read coils, address 3<>65535; classtype:protocol-command-decode; sid:9000014; rev:2;)
+
+# -----------------------------------------------------------------------------
+# 9000015 — Modbus read of holding register where read range overlaps OUT-OF-MAP.
+# Trigger: FC 3 (Read Holding Registers) where any address in the read
+#      range falls in 3..65535. Any source.
+# Why: same as 9000014. Scenario 2 exercises this with FC 3 reads at HR
+#      100 and HR 1000 (fully out-of-map). The FC 3 read at HR 0 qty 3
+#      (covers 0..2, fully in-map) is correctly EXCLUDED — confirms the
+#      range form's "any-addr-in-range" semantic doesn't over-match
+#      legitimate mapped-region reads.
+# Keyword: modbus app-layer (access read holding, address 3<>65535). See
+#      9000014 for the address-comparator-vs-range empirical finding.
+# -----------------------------------------------------------------------------
+alert tcp any any -> $OPENPLC_IP $MODBUS_PORT (msg:"OTLAB-MODBUS Read holding register range overlaps out-of-map (>=3)"; flow:to_server,established; modbus: access read holding, address 3<>65535; classtype:protocol-command-decode; sid:9000015; rev:2;)
