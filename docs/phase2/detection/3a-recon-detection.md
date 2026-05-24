@@ -35,14 +35,14 @@ Pinned IPs were added in this sub-session for `openplc` + `fuxa` via docker-comp
 - openplc: `172.18.0.2` (ot_zone) / `172.19.0.2` (mgmt_zone)
 - fuxa:    `172.18.0.3` (ot_zone) / `172.19.0.3` (mgmt_zone)
 
-Suricata is currently **not** pinned — Docker assigned it the next-free slot on each network, `172.18.0.4 / 172.19.0.4`. This creates a continuity issue worth knowing:
+Suricata was initially deployed without explicit IP pinning — Docker assigned the next-free slot on each network, `172.18.0.4 / 172.19.0.4`. Pinning was added in commit a91f5e2 (operational follow-up shipped 2026-05-23) so the IP semantics are deterministic across restarts. The continuity note below documents why the pinning matters:
 
 - During Phase 2 step 2's attack scenarios (2026-05-22), the attacker container was boundary-crossed into ot_zone and got `172.18.0.4` (Docker assigned the next-free slot after openplc=.2, fuxa=.3). **Step 2's pcaps show 172.18.0.4 as the attacker's source IP.**
-- Going forward (post-3a bring-up), Suricata holds the .4 slot. If the attacker is boundary-crossed again with Suricata running, Docker will assign the attacker `172.18.0.5` (or the next free slot).
+- Going forward (post-3a bring-up, post-pinning), Suricata holds the .4 slot deterministically. If the attacker is boundary-crossed again with Suricata running, Docker will assign the attacker `172.18.0.5` (or the next free slot).
 
 So `172.18.0.4` appearing in any LIVE eve.json (sub-sessions 3b/3c) is Suricata, not the attacker. The pcap evidence from step 2 keeps showing .4 as attacker because the network state at capture time had .4 free.
 
-Pinning Suricata to .4 explicitly (so the IP semantics are deterministic) is queued as a small follow-up commit after this evidence doc is shipped.
+Pinning Suricata to .4 explicitly was shipped at commit a91f5e2 (operational follow-up) the same day this evidence doc landed.
 
 ### Capture method — offline pcap replay
 
@@ -237,4 +237,4 @@ This is not a bug. It is a known Docker-bridge IDS deployment limitation, which 
 
 - **Sub-session 3b — Modbus protocol parsing.** Will enable Suricata's modbus app-layer parser and add rules for write FCs, function-code scanning, out-of-map reads (Finding §4 says detection here must parse PDUs, not rely on Modbus exceptions). Doc will land at `docs/phase2/detection/3b-modbus-protocol.md` — **does not exist yet (MANUAL: to be authored as Phase 2 sub-session 3b ships).**
 - **Sub-session 3c — Replay attack detection.** Will revisit scenario 5's replay attack and the RST-rule-redesign question (anomaly-based flow tracking). Doc will land at `docs/phase2/detection/3c-replay-attack.md` — **does not exist yet (MANUAL: to be authored as Phase 2 sub-session 3c ships).**
-- **Suricata IP pinning + SYS_NICE cap + rule flow clauses follow-up commit** — small operational polish identified during 3a bring-up; tracked in the post-3a follow-up queue. Not blocking 3a's evidence; not yet committed.
+- **Suricata IP pinning + rule flow clauses follow-up commit** — small operational polish identified during 3a bring-up; shipped at commit a91f5e2 (operational follow-up). Pinning landed plus SIDs 9000003/9000004 bumped to rev:2 with `flow:not_established,to_server;` clauses.

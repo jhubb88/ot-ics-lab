@@ -32,7 +32,7 @@ Replaced the deferral comment from 3a (`# Modbus parser stays at upstream defaul
 
 ### Sensor placement, IP pinning — continuity from 3a
 
-Unchanged. Suricata still multi-homed on both networks at 172.18.0.4 / 172.19.0.4 (Docker-assigned next-free slots; explicit pinning still on the post-3a follow-up queue). $FUXA_IP, $OPENPLC_IP, $MGMT_OPERATOR variables in `suricata.yaml` continue to resolve to the pinned bridges from 3a.
+Suricata multi-homed on both networks at the pinned IPs 172.18.0.4 / 172.19.0.4 (pinning shipped at a91f5e2 — Phase 2 step 3a operational follow-up). $FUXA_IP, $OPENPLC_IP, $MGMT_OPERATOR variables in `suricata.yaml` continue to resolve to the pinned bridges from 3a.
 
 ### Capture method — offline pcap replay with `-k none`
 
@@ -342,7 +342,6 @@ Do not conflate the live daemon's near-empty eve.json with "no alerts fired." Th
 - **Recapture baseline pcaps with TCP handshake included.** Restart FUXA (or kill its Modbus connection) so the next baseline tcpdump captures from the handshake start. Enables real false-positive validation that Harness Finding §2 currently blocks.
 - **Test exact-match form for N≠0** to characterize Keyword Finding §6 fully. ~5 min of additional replay testing.
 - **FUXA Modbus client silent-reconnect investigation.** Mid-3b session, FUXA's Modbus client silently dropped (HMI tank stopped rendering). Wire-level grep showed zero ESTABLISHED connections; recreate fixed it. Configure an explicit reconnect interval in FUXA's device config (`./fuxa/appdata`) so retry is automatic on drop. Becomes a Known Risks entry in MASTER.md.
-- **Pin Suricata's IPs** (currently next-free-slot at `172.18.0.4 / 172.19.0.4`) — small operational follow-up from 3a still queued.
 
 ---
 
