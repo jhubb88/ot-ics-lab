@@ -9,7 +9,7 @@ of the deliverable, not just the plumbing.
 - **Process simulated:** Generic plant tank-fill (level, pump, valve, high alarm)
 - **Phase:** 1 of 3 (Phase 1 complete; Phase 2 = security work on v3, Phase 3 = platform migration + zone hardening)
 - **Phase 1 status:** **Acceptance gate fully met — runtime, visual HMI, and Modbus/TCP capture all proven end-to-end** (see Acceptance Gate)
-- **Last updated:** 2026-05-23
+- **Last updated:** 2026-05-24
 - **Repo:** `<repo-root>` (your local clone location; absolute path is environment-specific)
 
 ---
@@ -93,6 +93,7 @@ connection). Ready for public repo flip.
 | `.env` file | None in Phase 1 | Fewer first-run failure modes for a beginner |
 | Zoning | `ot_zone`, `mgmt_zone`, `attacker_zone` | `attacker_zone` is the genuinely enforced boundary — proof landed 2026-05-22 (Phase 2 Findings §1) |
 | Suricata capabilities | `NET_ADMIN` + `NET_RAW` only (intentionally no `SYS_NICE`) | Permits `:ro` bind mounts on rules + config (supply-chain control: Suricata cannot tamper with its own ruleset at runtime even if compromised). Trade: cosmetic "running as root" startup warning, accepted — root inside a non-privileged container with no host access is not a security issue |
+| FUXA Modbus healthcheck | Detection-only (no autoheal sidecar) | FUXA 1.3.1 ModbusTCP driver has no auto-reconnect (Finding §10). Healthcheck shipped at 626fc56 marks `fuxa` as (unhealthy) within ~90s of a silent drop; operator manually runs `docker compose up -d --force-recreate fuxa` to recover. Local-use lab; autoheal sidecar deferred to portfolio-prep phase post-cert |
 
 ---
 
@@ -209,6 +210,36 @@ the silent drift the project rules exist to prevent.
   in user-level config, not the repo). RED-phase tested 2026-05-23 against
   two subagent scenarios; skill fired correctly on iptables long-form flag,
   stayed silent on a canonical git command.
+- 2026-05-24 — **Verify runtime claims against current state, not against
+  prior docs.** When a doc describes runtime state (IPs, container state,
+  file contents, version pinning, etc.), verify against current state via
+  live inspection (`docker inspect`, `ls`, `cat`) or commit history before
+  propagating claims from prior docs. Prior docs may be stale relative to
+  commits that landed after them. Lesson source: 2026-05-24 caught a
+  triple-stale claim — the 3a evidence doc (shipped 2026-05-23 at b7d9661)
+  said "Suricata is currently not pinned." Pinning shipped hours later at
+  a91f5e2 but the 3a doc was never updated. When writing 3b's evidence doc
+  on 2026-05-24, I inherited the stale claim by referencing the 3a doc
+  instead of running `docker inspect otlab-suricata`. The stale framing
+  propagated into project memory and into the next-day prompt for
+  "task 3 — pin Suricata's IPs." Corrected at 956ce3d (in-place doc fixes
+  for both 3a and 3b).
+- 2026-05-24 — **Tool selection at project start / phase boundary requires
+  a candidates evaluation before building.** Minimum 3 candidates per role,
+  evaluated for: last commit date, deprecation status, open issue volume,
+  known limitations (search `"{tool} reconnect/limitations/deprecated"`),
+  what real industry uses. Output as a decision-matrix doc in the repo.
+  **Upstream-deprecated = hard stop unless explicit justification with
+  migration plan.** This is a gate, not a suggestion. Lesson source:
+  retrospective on Phase 1 tool choices. OpenPLC v3 was chosen as the
+  PLC by default and is upstream EOL — only discovered during the
+  2026-05-21 verification spike on v4 (Phase 3 backlog now carries a
+  full v3→v4 migration as a dedicated phase). FUXA 1.3.1's missing
+  Modbus auto-reconnect (Finding §10) was discovered mid-Phase-2 only
+  when the HMI silently froze. Both would have been caught by a
+  pre-Phase-1 candidates evaluation. The cost of a 1-hour evaluation up
+  front would have been much smaller than the cost of working around
+  these limitations mid-phase.
 
 ---
 
@@ -473,18 +504,99 @@ connection-churn detection around flow-based primitives instead of rate
 thresholds. Cross-referenced in `docs/phase2/detection/3a-recon-detection.md`
 SID 9000002 discussion.
 
+### 9. Suricata 8.0.5 modbus keyword has multiple silent comparator bugs; range form is the only reliable address filter (2026-05-24)
+
+**Source:** Phase 2 sub-session 3b (Suricata Modbus protocol detection) —
+`docs/phase2/detection/3b-modbus-protocol.md` (shipped 5e06861). Six
+empirical keyword findings + two harness findings from four investigation
+cycles characterizing actual vs. documented behavior.
+
+**Summary:** Suricata 8.0.5's `modbus:` rule keyword has working primitives
+(`function N`, `access read|write <table>`) and broken comparator forms.
+Characterized across all 6 rules in the 3b ruleset (SIDs 9000010–9000015)
+plus syntax variations on scenario-2's pcap.
+
+**Six keyword findings (headline only — full investigation in 3b evidence doc):**
+
+| # | Keyword form | Behavior |
+|---|---|---|
+| K§1 | `function N` (exact FC match) | Works as documented |
+| K§2 | `access read\|write <table>` (FC class match) | Works as documented |
+| K§3 | `address <N` / `address >N` on `access read` rules | **Silently no-op** — clause parses but doesn't filter; rule fires regardless of address |
+| K§4 | `address <N` on `access write` rules | **Silently off-by-one** — `<3` matches addresses 0 and 1 only; address 2 silently excluded (would have missed scenario 3's alarm-coil attack) |
+| K§5 | `address X<>Y` (range, exclusive) | Works AND has richer semantic than expected — matches if ANY address in the read range falls within [X,Y], not just the start address |
+| K§6 | `address N` (exact match, N=0) | Produces zero matches; unverified for N≠0 |
+
+**Two harness findings:**
+
+| # | Issue | Workaround |
+|---|---|---|
+| H§1 | In-container `tcpdump -i any` pcaps have empty TCP checksums (kernel offload); Suricata's default pcap-file mode rejects them from app-layer inspection | Per-run `-k none` flag for offline replay; keeps daemon defaults intact |
+| H§2 | Mid-stream baseline pcaps (no TCP handshake captured) block app-layer parser engagement entirely — `flow:established` doesn't match, parser never sees reassembled bytes | Recapture from a fresh handshake (restart FUXA so its long-lived conn re-establishes mid-tcpdump); held item |
+
+**Detection-design implications:**
+
+- Comparator forms (`>N`, `<N`) on read OR write rules cannot be trusted in 8.0.5. The 3b ruleset uses range form on reads (`address 3<>65535` for out-of-map detection) and drops the address sub-clause on writes (source-IP + write-class is the robust primitive — no legitimate writer exists, so any non-FUXA write is suspicious regardless of address).
+- **The general lesson:** when a keyword's documented behavior diverges from its actual behavior, use the robust subset of the keyword rather than work around bugs. Source-IP + protocol-direction filters are durable across Suricata versions; address comparators are advisory until verified per-version.
+- **6/6 pcap predictions matched** in the final 3b validation run (251 alerts across 4 attack pcaps, 0 on baselines). The match arrived after four iteration cycles characterizing the keyword — the investigation IS the finding, not just the clean final result.
+
+**Forward link:** if Suricata 8.0.6+ fixes the comparator bugs (K§3, K§4), the rules as shipped might suddenly over-fire on addr=3+ writes. The 3b evidence doc Decision §2 explicitly addresses this fragility — Path R (no address sub-clause) was chosen over Path Q (off-by-one compensation `<4`) on rule-honesty + upstream-fix-robustness grounds.
+
+### 10. FUXA 1.3.1 ModbusTCP driver has no auto-reconnect; silent client drops require detection at the deployment layer (2026-05-24)
+
+**Source:** Mid-Phase 2 sub-session 3b investigation. Driver source:
+`/usr/src/app/FUXA/server/runtime/devices/modbus/index.js` inside the
+`frangoteam/fuxa:1.3.1` container.
+
+**Summary:** When FUXA's Modbus client TCP connection drops mid-poll, the
+driver logs the error and continues reading on the dead socket without
+retrying. No `on-error` reconnect handler exists. Comparison with sibling
+drivers in the same FUXA version: MQTT driver has `client.on("reconnect", ...)`
+handler; Redis driver has `reconnectStrategy: (retries) => Math.min(100 +
+retries * 200, 3000)` backoff; Modbus driver has neither. The device-config
+schema does not expose a reconnect-related field because the driver
+doesn't implement one.
+
+**Observed failure mode (2026-05-24):** FUXA's HMI tank stopped rendering
+in the browser. `docker compose ps` showed `otlab-fuxa` as Up. FUXA logs
+showed zero Modbus error messages. `/proc/net/tcp` grep on the openplc
+side showed zero ESTABLISHED conns to :502 from FUXA's IP. Recovery:
+`docker compose up -d --force-recreate fuxa` re-established the connection
+and the HMI resumed rendering.
+
+**Mitigation (shipped 626fc56):** Docker healthcheck on the `fuxa` service
+that probes `/proc/net/tcp` inside the FUXA container for an ESTABLISHED
+conn (state 01) to openplc:502 on either bridge IP (172.18.0.2 or
+172.19.0.2 in little-endian hex). After 3 consecutive 30s-interval
+failures, Docker marks fuxa `(unhealthy)`. Detection-only — no autoheal
+sidecar. **On unhealthy: operator runs `docker compose up -d --force-recreate fuxa`.**
+End-to-end verified (stop openplc → fuxa flips unhealthy at t=93s →
+restart openplc + recreate fuxa → healthy in 10s). Phase 1 attacker +
+Suricata services not disturbed by the test cycle.
+
+**Known Risk for production-equivalent deployments:** detection-only
+healthcheck is sufficient for this lab's local use; production-grade
+autoheal (sidecar container monitoring health-status events + auto-
+restarting unhealthy containers) is a deferred follow-up for the
+portfolio-prep phase post-cert. If FUXA Modbus drops become frequent
+(>1/week observed), investigate environmental trigger before adding
+autoheal.
+
 ---
 
 ## Phase 2 Backlog (security operations on the Phase 1 stack — documented; not built)
 
-- [ ] **Suricata passive monitoring** — sub-session 3a (recon detection)
-  shipped 2026-05-23. Suricata 8.0.5 multi-homed on ot_zone + mgmt_zone;
-  5-rule recon-detection ruleset (SIDs 9000001–9000005) validated via
-  offline pcap replay against scenario-1's pcap — 3/5 SIDs fired with
-  full evidence; 2 non-firing SIDs documented as findings, not failures.
-  Full write-up in `docs/phase2/detection/3a-recon-detection.md`.
-  Sub-sessions 3b (Modbus protocol parsing) and 3c (replay attack
-  detection) remaining; each is its own sub-session.
+- [ ] **Suricata passive monitoring** — sub-sessions 3a (recon detection,
+  shipped 2026-05-23) and 3b (Modbus protocol detection, shipped 2026-05-24)
+  complete; sub-session 3c (replay attack detection + live-capture revisit)
+  remaining. Suricata 8.0.5 multi-homed on ot_zone + mgmt_zone with pinned
+  IPs (172.18.0.4 / 172.19.0.4) and Modbus app-layer parser enabled.
+  11-rule ruleset total: 5 recon rules (SIDs 9000001–9000005, validated
+  against scenario-1's pcap, 3/5 fired with full evidence) + 6 Modbus
+  protocol rules (SIDs 9000010–9000015, 6/6 prediction match across 4
+  attack pcaps and 2 baselines). Full write-ups in
+  `docs/phase2/detection/3a-recon-detection.md` and
+  `docs/phase2/detection/3b-modbus-protocol.md`.
 - [x] **Attacker container in `attacker_zone`** (shipped 2026-05-22) — pinned Dockerfile on `debian:bookworm-20260518-slim` with nmap, tcpdump, curl, dig, ping, ip, pymodbus 3.6.9, scapy. Sits idle on `attacker_zone` only; reached via `docker exec`. Segmentation proof in [Phase 2 Findings §1](#phase-2-findings).
 - [ ] Historian (InfluxDB + Grafana)
 - [x] **Written-up attack scenarios** (shipped 2026-05-22) — five
