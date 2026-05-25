@@ -221,17 +221,17 @@ alert tcp any any -> $OPENPLC_IP $MODBUS_PORT (msg:"OTLAB-MODBUS Read holding re
 # constrain address use here; not relevant given the signal choice.)
 #
 # Scenario-5 replay attack — these rules add Modbus-layer evidence to
-# the existing 9000003 + 9000013 coverage. Per Replay Finding §1 in the
-# 3c evidence doc (FORWARD ref — lands in Change 2 this session): source
-# IP is the only protocol-layer signal that distinguishes FUXA from a
-# clever attacker; the actual control for replay is segmentation, not
-# signature detection.
+# the existing 9000003 + 9000013 coverage. Per Replay Finding §1 in
+# docs/phase2/detection/3c-replay-attack.md: source IP is the only
+# protocol-layer signal that distinguishes FUXA from a clever attacker;
+# the actual control for replay is segmentation, not signature
+# detection.
 #
 # Cross-references:
 #   docs/phase2/scenarios/scenario-5-modbus-replay.md  (attack)
-#   docs/phase2/detection/3c-replay-attack.md          (3c evidence — FORWARD; lands in Change 2 this session)
+#   docs/phase2/detection/3c-replay-attack.md          (3c evidence)
 #   docs/monitoring.md §5 row 2                        (indicator)
-#   docs/MASTER.md Phase 2 Findings                    (updated post-3c — FORWARD; lands in Change 3 this session)
+#   docs/MASTER.md Phase 2 Findings §11, §12           (3c detection + platform-constraint findings)
 # =============================================================================
 
 # -----------------------------------------------------------------------------
@@ -246,7 +246,7 @@ alert tcp any any -> $OPENPLC_IP $MODBUS_PORT (msg:"OTLAB-MODBUS Read holding re
 # Keyword: modbus app-layer (access read coils). No address sub-clause —
 #      see section header for rationale.
 # -----------------------------------------------------------------------------
-alert tcp !$FUXA_IP any -> $OPENPLC_IP $MODBUS_PORT (msg:"OTLAB-MODBUS Read coil from non-FUXA source"; flow:to_server,established; modbus: access read coils; classtype:attempted-recon; sid:9000020; rev:1;)
+alert tcp !$FUXA_IP any -> $OPENPLC_IP $MODBUS_PORT (msg:"OTLAB-MODBUS Read coil from non-FUXA source"; flow:to_server,established; modbus: access read coils; classtype:attempted-recon; sid:9000020; rev:2;)
 
 # -----------------------------------------------------------------------------
 # 9000021 — Modbus read of holding register (FC 3) from non-FUXA source.
@@ -261,4 +261,4 @@ alert tcp !$FUXA_IP any -> $OPENPLC_IP $MODBUS_PORT (msg:"OTLAB-MODBUS Read coil
 # Keyword: modbus app-layer (access read holding). No address sub-clause —
 #      see section header for rationale.
 # -----------------------------------------------------------------------------
-alert tcp !$FUXA_IP any -> $OPENPLC_IP $MODBUS_PORT (msg:"OTLAB-MODBUS Read holding register from non-FUXA source"; flow:to_server,established; modbus: access read holding; classtype:attempted-recon; sid:9000021; rev:1;)
+alert tcp !$FUXA_IP any -> $OPENPLC_IP $MODBUS_PORT (msg:"OTLAB-MODBUS Read holding register from non-FUXA source"; flow:to_server,established; modbus: access read holding; classtype:attempted-recon; sid:9000021; rev:2;)
