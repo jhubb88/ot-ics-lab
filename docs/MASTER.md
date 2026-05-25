@@ -582,21 +582,145 @@ portfolio-prep phase post-cert. If FUXA Modbus drops become frequent
 (>1/week observed), investigate environmental trigger before adding
 autoheal.
 
+### 11. 3c offline replay confirms pre-3c ruleset already detected scenario 5; new SIDs add forensic granularity, not detection coverage (2026-05-25)
+
+**Source:** Phase 2 sub-session 3c (Suricata replay-attack detection) —
+`docs/phase2/detection/3c-replay-attack.md` (shipped 04dd25d, this
+session). Offline replay against
+`captures/phase2-scenario-5-replay-2026-05-22.pcap`; eve.json + fast.log
+retained at `suricata/logs/replay-3c/` (gitignored).
+
+**Summary:** Two new SIDs ship in 3c — 9000020 (FC 1 read coils from
+non-FUXA source) and 9000021 (FC 3 read holding from non-FUXA source).
+Both are protocol-aware companions to 3b's 9000012 / 9000013 (non-FUXA
+writes), completing the source-IP-filtered by-table matrix.
+
+Validation produced 6 alerts against scenario-5 pcap, matching
+prediction exactly (all 4 per-SID counts hit):
+
+- 9000003 x3 (attacker SYN to :502 from non-FUXA, three flows)
+- 9000013 x1 (mutated FC 6 write, TID 0x00a3, value 4242)
+- 9000020 x0 (no FC 1 from attacker in this pcap — verification gap
+  held; positive exercise of 9000020 is a future-scenario item)
+- 9000021 x2 (verbatim FC 3 replay TID 0x00a3 + verify-read TID 0x0042)
+
+The pre-3c ruleset (11 SIDs) already produced 4 of those 6 alerts. The
+9000020 / 9000021 additions contribute 2 alerts of forensic context
+(`app_proto: modbus` + decoded operation in the alert payload) but DO
+NOT change the answer to "did Suricata detect this attack." The answer
+was yes pre-3c.
+
+The 3c contribution is alert *richness*, not detection *coverage*.
+
+**Implication for downstream SIEM/SOC consumers:** 9000021 fires twice
+per attack session (no per-session dedupe — one alert per non-FUXA
+read PDU). A multi-PDU read exfiltration would produce N alerts, not
+1. Expected Suricata signature behavior; documented because alert
+volume per attack session matters for triage cost projections.
+
+**Forward link from §7:** the protocol-level finding (no
+authentication, no integrity) shipped at scenario-5 documentation
+time. §11 is the detection-side closure: source-IP + read-class is
+the only Modbus-layer signal that operationalizes §7's "source IP
+is the only thing that distinguishes a clever attacker from FUXA"
+conclusion. Segmentation remains the actual control (§7 + §11).
+
+**Forward link from §8 — NOT REALIZED in 3c:** §8 anticipated that
+"sub-session 3b/3c will redesign port-scan and connection-churn
+detection around flow-based primitives instead of rate thresholds."
+3c did not undertake this redesign. Rate-threshold rules 9000002
+and 9000005 ship in 3c unchanged. Held as a future task — likely
+needs host-mode live capture to exercise threshold-state under
+load, so coupled to the Docker Engine on Linux migration (Finding
+§12). Not a 3c blocker.
+
+### 12. Docker Desktop's host networking is layer-4 only on every platform; AF_PACKET live capture requires Docker Engine on Linux (2026-05-25)
+
+**Source:** Phase 2 sub-session 3c live-capture evaluation —
+`docs/phase2/detection/3c-replay-attack.md` Live-Capture Finding §1
+and Architectural Decision §1. Triggered by the question "can we
+enable live Suricata AF_PACKET capture in 3c to validate alerting on
+fresh attacks?" Answer required reading the Docker Desktop docs:
+https://docs.docker.com/engine/network/drivers/host/
+
+**Summary:** Docker Desktop's `network_mode: host` operates at layer
+4 on every platform it ships — Windows, macOS, and Linux. This is a
+Docker Desktop architectural property: a Docker Desktop container
+runs inside a Linux VM (the Moby VM) separated from the host kernel
+by a virtualization boundary, regardless of the host OS. From the
+upstream docs:
+
+> "The host network feature of Docker Desktop works on layer 4. This
+> means that unlike with Docker on Linux, network protocols that
+> operate below TCP or UDP are not supported. Processes inside the
+> container cannot bind to the IP addresses of the host because the
+> container has no direct access to the interfaces of the host."
+
+"Docker on Linux" in that quote means Docker Engine (`docker-ce`)
+installed natively on a Linux host — NOT Docker Desktop for Linux,
+which still uses the Moby VM and therefore still has the L4
+limitation. Docker Engine on Linux has no intermediating VM; host
+mode there is full L2 access.
+
+Suricata's `af-packet` capture requires raw L2 interface access.
+Docker Desktop's host mode does not provide this. The `br-*` bridge
+interfaces visible from inside the Moby VM are not accessible to a
+host-mode Suricata container for AF_PACKET capture — different
+mechanisms, not the same as host mode on Docker Engine for Linux.
+
+**Implication:** the obvious solution for the Docker-bridge-MAC-
+learning visibility limitation (3a/3b deferred live capture for this
+reason) does not exist on Docker Desktop, regardless of host OS.
+Three workarounds were evaluated for a future migration to Docker
+Engine on Linux:
+
+1. `network_mode: host` on Docker Engine for Linux (`docker-ce`
+   installed natively — inside WSL2 alongside or in place of Docker
+   Desktop, OR on a dedicated Linux host) — works, simplest.
+   Recommended path.
+2. `macvlan` driver swap — works on either Docker Desktop or Docker
+   Engine, but invasive compose rewrite and ties the lab to a
+   specific host NIC name. Not recommended.
+3. iptables NFLOG mirroring on the host kernel — only meaningful on
+   Docker Engine for Linux (the Moby VM's kernel isn't directly
+   accessible from Docker Desktop on the host side). Adds host-
+   kernel state coupling and brittleness.
+
+None of the three are 3c-actionable on the current Docker Desktop
+deployment. 3c ships with offline pcap replay only (Finding §11).
+Live-capture deployment is a post-cert portfolio-prep item, NOT a
+Phase 2 blocker.
+
+**Forward link:** when this lab migrates from Docker Desktop to
+Docker Engine for Linux as a portfolio-prep step, host-mode Suricata
+becomes the canonical deployment shape. At that point, 3c's
+offline-replay results should be re-validated against live traffic
+to confirm parity — same SIDs, same counts (or document divergence).
+Rate-threshold rules per §11's forward-link-not-realized note will
+also need live-capture to exercise.
+
 ---
 
 ## Phase 2 Backlog (security operations on the Phase 1 stack — documented; not built)
 
-- [ ] **Suricata passive monitoring** — sub-sessions 3a (recon detection,
-  shipped 2026-05-23) and 3b (Modbus protocol detection, shipped 2026-05-24)
-  complete; sub-session 3c (replay attack detection + live-capture revisit)
-  remaining. Suricata 8.0.5 multi-homed on ot_zone + mgmt_zone with pinned
-  IPs (172.18.0.4 / 172.19.0.4) and Modbus app-layer parser enabled.
-  11-rule ruleset total: 5 recon rules (SIDs 9000001–9000005, validated
-  against scenario-1's pcap, 3/5 fired with full evidence) + 6 Modbus
-  protocol rules (SIDs 9000010–9000015, 6/6 prediction match across 4
-  attack pcaps and 2 baselines). Full write-ups in
-  `docs/phase2/detection/3a-recon-detection.md` and
-  `docs/phase2/detection/3b-modbus-protocol.md`.
+- [x] **Suricata passive monitoring** — sub-sessions 3a (recon detection,
+  shipped 2026-05-23), 3b (Modbus protocol detection, shipped 2026-05-24),
+  and 3c (replay-attack detection + offline validation closure, shipped
+  2026-05-25) all complete. Suricata 8.0.5 multi-homed on ot_zone +
+  mgmt_zone with pinned IPs (172.18.0.4 / 172.19.0.4) and Modbus
+  app-layer parser enabled. 13-rule ruleset total: 5 recon rules (SIDs
+  9000001–9000005, validated against scenario-1's pcap, 3/5 fired with
+  full evidence) + 6 Modbus protocol rules (SIDs 9000010–9000015, 6/6
+  prediction match across 4 attack pcaps and 2 baselines) + 2 non-FUXA
+  Modbus-read rules (SIDs 9000020–9000021, all 4 per-SID counts matched
+  prediction against scenario-5 pcap; 9000020 not positively exercised
+  — held as future-scenario verification item). Full write-ups in
+  `docs/phase2/detection/3a-recon-detection.md`,
+  `docs/phase2/detection/3b-modbus-protocol.md`, and
+  `docs/phase2/detection/3c-replay-attack.md`. **Live-capture deployment
+  deferred** to post-cert portfolio-prep work (per Finding §12: Docker
+  Desktop host mode is L4-only on every platform; AF_PACKET requires
+  Docker Engine on Linux).
 - [x] **Attacker container in `attacker_zone`** (shipped 2026-05-22) — pinned Dockerfile on `debian:bookworm-20260518-slim` with nmap, tcpdump, curl, dig, ping, ip, pymodbus 3.6.9, scapy. Sits idle on `attacker_zone` only; reached via `docker exec`. Segmentation proof in [Phase 2 Findings §1](#phase-2-findings).
 - [ ] Historian (InfluxDB + Grafana)
 - [x] **Written-up attack scenarios** (shipped 2026-05-22) — five
