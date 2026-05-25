@@ -699,6 +699,95 @@ to confirm parity — same SIDs, same counts (or document divergence).
 Rate-threshold rules per §11's forward-link-not-realized note will
 also need live-capture to exercise.
 
+### 13. OpenPLC v3 archived upstream 2026-04-04; Phase 3 stack locked via ADR 0001 (Gate 2 closure, 2026-05-25)
+
+**Source:** Tool-selection-rule retroactive evaluation —
+`docs/decisions/0001-phase3-stack.md` (this session). Triggered by the
+mid-Phase-2 codification of the tool-selection gate (≥3 candidates per
+role, deprecation status checked, platform-fit verified) applied
+retroactively to the foundational FUXA + OpenPLC v3 stack.
+
+**Summary:** OpenPLC v3 was formally **archived** on
+`github.com/thiagoralves/OpenPLC_v3` on 2026-04-04 with an explicit
+"End of Life — replaced by OpenPLC Runtime v4" notice. This is a
+stronger status than Phase 1's "upstream EOL" framing: the repo is
+read-only, no future patches even hypothetically. The tool-selection
+rule's "upstream-deprecated = hard stop unless explicit justification"
+clause therefore disqualifies v3 for Phase 3 and beyond.
+
+ADR 0001 evaluated 5 PLC candidates and 6 HMI candidates with
+platform-fit verification on Docker Desktop on Windows + WSL2, plus
+two new ADR columns (Phase 2 finding regression risk; IDS rules
+regression risk). Outcome:
+
+- **PLC: OpenPLC v4 (Autonomy-Logic).** Replaces v3. Image at
+  `ghcr.io/autonomy-logic/openplc-runtime:latest` (NOT Docker Hub),
+  pulled and characterized empirically this session. Beremiz
+  dismissed on platform-fit grounds (wxPython IDE + Pyro RPC; no
+  documented Docker split-deployment recipe for Windows + WSL2).
+- **HMI: FUXA 1.3.2.** Bumped from 1.3.1 (compose tag-only change).
+  Same vendor, minor version, released 2026-05-19. Alternatives
+  dismissed on regression-risk + migration-cost grounds — switching
+  HMIs would force re-baselining all 13 SIDs and re-shaping 5 attack
+  scenarios, and no candidate (Ignition Maker, Scada-LTS, Node-RED
+  Dashboard 2.0) is sufficiently better for the security-lab role to
+  justify that.
+
+**Implication:** Phase 3 starting task is migration. Not done this
+session — this ADR commits to the destination; the migration itself
+is Phase 3 work. Findings §3 (web UI), §4 (silent-zero out-of-map),
+§5–§7 (write semantics + reassertion), §10 (FUXA reconnect) all need
+re-validation against the new runtime, per ADR Consequences.
+
+**Sources:** ADR `docs/decisions/0001-phase3-stack.md`; archive
+notice `github.com/thiagoralves/OpenPLC_v3`; v4 home
+`github.com/Autonomy-Logic/openplc-runtime`; FUXA 1.3.2 release
+`github.com/frangoteam/FUXA/releases/tag/v1.3.2`.
+
+### 14. OpenPLC v4 ships Modbus as a plugin that is silent until drivers.cfg is supplied AND PLC enters RUN state (empirical, 2026-05-25)
+
+**Source:** ADR 0001 empirical verification step — pulled
+`ghcr.io/autonomy-logic/openplc-runtime:latest` (356 MB, amd64,
+entrypoint `bash ./start_openplc.sh`) and characterized
+out-of-box behavior on Docker Desktop on Windows + WSL2.
+
+**Summary:** Three layered conditions gate Modbus listening on
+v4, not the single condition v3 had ("container up = :502
+listening"):
+
+1. **Image EXPOSE list** contains only `8443/tcp`. Port 502 is
+   not in the EXPOSE manifest at all.
+2. **Plugin enablement.** The image ships
+   `/workdir/venvs/{modbus_slave,modbus_master,opcua,runtime}`
+   Python venvs and plugin source under
+   `/workdir/core/src/drivers/plugins/python/modbus_slave/`, but
+   **no `drivers.cfg` file exists** anywhere in the freshly-pulled
+   image. Modbus is therefore installed but unconfigured.
+3. **PLC state.** Even with a hypothetical drivers.cfg in place,
+   the Phase 2 spike (2026-05-21) observed that Modbus does not
+   begin listening until the PLC enters RUN state, which requires
+   a compiled program uploaded via the v4 REST API. That spike
+   observation is consistent with — though not independently
+   re-verified against — current v4.0.9.
+
+**Operational consequence for Phase 3 lab bring-up:** the sequence
+becomes (a) `docker compose up` → REST API on 8443 only, (b)
+operator-supplied drivers.cfg + program upload via Editor → (c)
+PLC RUN state → (d) Modbus on :502 finally listens. This is more
+operator steps than v3 required and must be documented in the
+Phase 3 operator runbook (separate Phase 3 artifact).
+
+**Implication for ADR 0001's "Migration cost" column:** the column
+score for OpenPLC v4 was "Substantial" precisely because of this
+finding — the operator workflow changes, not just the compose
+tag. Anyone proposing a simpler "swap the image tag and you're
+done" migration plan in the future should be pointed at this
+finding to recalibrate.
+
+**Sources:** ADR `docs/decisions/0001-phase3-stack.md` Empirical
+verifications section; v4 docs
+`github.com/Autonomy-Logic/openplc-runtime/blob/main/docs/DOCKER.md`.
+
 ---
 
 ## Phase 2 Backlog (security operations on the Phase 1 stack — documented; not built)
