@@ -31,3 +31,10 @@ Thumbs.db
 # source. Keep the directory via .gitkeep; ignore the contents.
 suricata/logs/*
 !suricata/logs/.gitkeep
+
+# --- Cheat-sheet PDFs and source ------------------------------------------
+# Markdown source + generated PDFs + supporting CSS for friends-and-family
+# cheat sheets. Untracked so PDF regeneration doesn't bloat the repo with
+# binary blobs. Distribute PDFs out-of-band (email / file share / GitHub
+# Releases) rather than committed.
+docs/cheatsheets/
