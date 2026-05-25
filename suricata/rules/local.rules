@@ -185,3 +185,80 @@ alert tcp any any -> $OPENPLC_IP $MODBUS_PORT (msg:"OTLAB-MODBUS Read coil range
 #      9000014 for the address-comparator-vs-range empirical finding.
 # -----------------------------------------------------------------------------
 alert tcp any any -> $OPENPLC_IP $MODBUS_PORT (msg:"OTLAB-MODBUS Read holding register range overlaps out-of-map (>=3)"; flow:to_server,established; modbus: access read holding, address 3<>65535; classtype:protocol-command-decode; sid:9000015; rev:2;)
+
+# =============================================================================
+# Phase 2 step 3c — Non-FUXA Modbus reads (SIDs 9000020–9000021)
+#
+# Added 2026-05-25. Symmetric companions to 9000012 / 9000013 (non-FUXA
+# writes). Alert on FC 1 (read coils) and FC 3 (read holding) from any
+# source that is NOT FUXA — the Modbus-layer companion to 9000003's L4
+# alert on non-FUXA contact with :502.
+#
+# These are NOT replay-detection rules. They detect unauthorized Modbus
+# reads from a non-FUXA source. A replay attack (verbatim or mutate-and-
+# replay of a captured FUXA PDU) is ONE INSTANCE of an unauthorized read,
+# so these rules will fire on the read portion of a replay — but they
+# will equally fire on any other unauthorized read (recon, data-exfil,
+# operator monitoring from the wrong host). The detection capability is
+# "non-FUXA read," not "replay."
+#
+# Coverage analysis vs. existing rules:
+#   - Every flow that fires 9000020 / 9000021 also fires 9000003 at the
+#     SYN. These rules add Modbus-layer evidence (app_proto: modbus +
+#     read operation) to the L4 SYN alert; they do NOT add new detection
+#     coverage. Framing is forensic granularity, not new detection.
+#   - Symmetric with 9000012 / 9000013: completes the source-IP-filtered
+#     by-table set (read coils, read holding, write coils, write holding).
+#   - 9000014 / 9000015 already alert on out-of-map reads from ANY source.
+#     9000020 / 9000021 fire on IN-MAP reads from non-FUXA — a gap those
+#     don't cover.
+#
+# Keyword choice: no address sub-clause, same as 9000012 / 9000013. The
+# detection signal is source-IP-not-FUXA + read-class. Address is
+# irrelevant — an attacker reading mapped HR 0..2 is exactly as
+# unauthorized as reading unmapped HR 1000. (Suricata 8.0.5 address-
+# comparator bugs on read rules per 3b Keyword Finding §3 would also
+# constrain address use here; not relevant given the signal choice.)
+#
+# Scenario-5 replay attack — these rules add Modbus-layer evidence to
+# the existing 9000003 + 9000013 coverage. Per Replay Finding §1 in the
+# 3c evidence doc (FORWARD ref — lands in Change 2 this session): source
+# IP is the only protocol-layer signal that distinguishes FUXA from a
+# clever attacker; the actual control for replay is segmentation, not
+# signature detection.
+#
+# Cross-references:
+#   docs/phase2/scenarios/scenario-5-modbus-replay.md  (attack)
+#   docs/phase2/detection/3c-replay-attack.md          (3c evidence — FORWARD; lands in Change 2 this session)
+#   docs/monitoring.md §5 row 2                        (indicator)
+#   docs/MASTER.md Phase 2 Findings                    (updated post-3c — FORWARD; lands in Change 3 this session)
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# 9000020 — Modbus read of coil (FC 1) from non-FUXA source.
+# Trigger: any FC 1 (read coils) PDU from a source IP that is NOT FUXA.
+# Why: monitoring.md §5 row 2 — FUXA is the only legitimate Modbus
+#      client. Any non-FUXA source reading coils is unauthorized
+#      enumeration of process state (Pump_Run / Valve_Open / High_Alarm
+#      plus protocol-surface beyond the documented map). Adds protocol-
+#      layer evidence (app_proto: modbus + read coils operation) to the
+#      L4 alert from 9000003. NOT replay-specific (see section header).
+# Keyword: modbus app-layer (access read coils). No address sub-clause —
+#      see section header for rationale.
+# -----------------------------------------------------------------------------
+alert tcp !$FUXA_IP any -> $OPENPLC_IP $MODBUS_PORT (msg:"OTLAB-MODBUS Read coil from non-FUXA source"; flow:to_server,established; modbus: access read coils; classtype:attempted-recon; sid:9000020; rev:1;)
+
+# -----------------------------------------------------------------------------
+# 9000021 — Modbus read of holding register (FC 3) from non-FUXA source.
+# Trigger: any FC 3 (read holding registers) PDU from a source IP that
+#      is NOT FUXA.
+# Why: monitoring.md §5 row 2 — same logic as 9000020. HR 0,1,2 expose
+#      tank Level_PV plus operator-display setpoints; non-FUXA reads
+#      here reveal current process state to an unauthorized client.
+#      Verbatim replay of a FUXA FC 3 poll from an attacker source IP is
+#      ONE INSTANCE of this — the rule is not specific to replay. NOT
+#      replay-specific (see section header).
+# Keyword: modbus app-layer (access read holding). No address sub-clause —
+#      see section header for rationale.
+# -----------------------------------------------------------------------------
+alert tcp !$FUXA_IP any -> $OPENPLC_IP $MODBUS_PORT (msg:"OTLAB-MODBUS Read holding register from non-FUXA source"; flow:to_server,established; modbus: access read holding; classtype:attempted-recon; sid:9000021; rev:1;)
