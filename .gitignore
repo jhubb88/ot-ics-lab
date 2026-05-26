@@ -32,6 +32,13 @@ Thumbs.db
 suricata/logs/*
 !suricata/logs/.gitkeep
 
+# --- OpenPLC Editor v4 build output ---------------------------------------
+# The Editor compiles the project's ST source to MATIEC C output here on
+# every Build/Compile. The build/ tree is reproducible from the committed
+# project state (project.json + devices/*.json + pous/programs/main.st);
+# regenerate via the Editor or pandoc-equivalent — never edited by hand.
+plc/v4/editor-project/build/
+
 # --- Cheat-sheet PDFs and source ------------------------------------------
 # Markdown source + generated PDFs + supporting CSS for friends-and-family
 # cheat sheets. Untracked so PDF regeneration doesn't bloat the repo with

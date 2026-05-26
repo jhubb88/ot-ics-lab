@@ -251,3 +251,105 @@ Empirical verifications performed this session:
 - Image EXPOSE list contains only `8443/tcp`
 - Fresh-container listening sockets: only `0.0.0.0:8443`
 - `/workdir/venvs/{modbus_slave,modbus_master,opcua,runtime}` exist but no `drivers.cfg` ships in the image
+
+---
+
+## Corrections forward (appended 2026-05-26 at Phase 3 migration close)
+
+The body of this ADR above remains exactly as committed at `bf69781`
+(2026-05-25). Empirical work during Stops 1–6 surfaced five reframes
+to the original ADR's framing; per doc-edit-triage discipline, none of
+the body is rewritten — these are inline-acknowledged here so a future
+reader doesn't take the original text out of context.
+
+### 1. Configuration filename — drivers.cfg → plugins.conf
+
+The ADR uses "drivers.cfg" terminology throughout the Consequences
+section and the OpenPLC v4 Known Limitations row. **The actual v4
+source loads `./plugins.conf`** (relative to `/workdir`), per:
+
+- `core/src/plc_app/plc_main.c:108` (v4.0.9) / `:110` (v4.1.0):
+  `plugin_driver_load_config(plugin_driver, "./plugins.conf")`
+- `core/src/plc_app/plc_state_manager.c:246` (v4.0.9) / `:254` (v4.1.0):
+  `plugin_driver_update_config(plugin_driver, "./plugins.conf")`
+
+Format unchanged from what the ADR described: CSV with columns
+`name,path,enabled,type,plugin_related_config_path,venv_path`, parsed
+by `core/src/drivers/plugin_config.c:42`. The lab's runtime config file
+lives at `plc/v4/plugins.conf` and is bind-mounted to
+`/workdir/plugins.conf` (read-only) — see MASTER.md §15.
+
+### 2. Modbus listening — two gates → four gates
+
+The ADR's OpenPLC v4 Known Limitations row described Modbus as "silent
+until plugins.conf [drivers.cfg] supplied AND PLC in RUN state" — two
+gates. **The actual gate chain is four conditions**, all required:
+
+1. `plugins.conf` exists with `modbus_slave` row enabled (gate 1)
+2. The plugin's `config.json` overrides default port 5020 → 502 (gate 2)
+3. A compiled `libplc_*.so` exists in `/workdir/build/` (gate 3 — output of an Editor-produced bundle uploaded via REST and compiled by the runtime's `scripts/compile.sh`)
+4. PLC is in RUN state, transitioned via authenticated `GET /api/start-plc` (gate 4 — depends on gate 3)
+
+Gates 1-2 are configurable via the bind mounts already shipped with the
+lab. Gates 3-4 happen on every Build/Compile via the OpenPLC Editor v4
+desktop application. See MASTER.md §15 + §17 for the empirical
+verification and §20 for the related `update_plugin_configurations`
+side effect.
+
+### 3. Editor desktop application — "separate" → "mandatory"
+
+The ADR's OpenPLC v4 row says "Editor is a separate desktop application
+(wxPython)" and the Migration cost column says "Editor is a separate
+desktop application." Two corrections:
+
+- **The Editor is mandatory, not optional.** v4 Runtime has no MATIEC
+  compiler; the bundle uploaded to `POST /api/upload-file` must contain
+  MATIEC C output (`Config0.c`, `Res0.c`, `debug.c`, `glueVars.c`,
+  `lib/`). Editor README line 66 is explicit: *"Compile in Editor — The
+  Editor compiles locally (JSON → XML → ST → C files) and packages
+  sources into program.zip"*. There is no operator path that bypasses
+  the Editor for compile. See MASTER.md §16.
+- **The Editor is Electron, not wxPython.** The "wxPython" framing was
+  carried in from Beremiz comparison and was wrong for v4 Editor.
+  v4 Editor (v4.1.4 installed in this lab) is an Electron desktop app
+  with installer at `github.com/Autonomy-Logic/openplc-editor/releases`.
+
+### 4. Version pin — "v4 line" → "v4.0.9 pinned" because v4.1.x is broken
+
+The ADR's PLC decision said "OpenPLC v4 (Autonomy-Logic)" without
+specifying patch. The image initially pulled was the moving `:latest`
+tag, which resolved to `v4.1.0-rc.1` and then `v4.1.0` final. **Both
+v4.1.x runtimes reject MatIEC bundles**, and Editor v4.1.x cannot
+produce STruC++ output (zero `strucpp` source matches in either repo).
+Empirically, **v4.0.9 is the last functional Editor↔Runtime combination**
+and is what the lab pins to in compose. See MASTER.md §18.
+
+Two upstream issues filed at Phase 3 close:
+
+- [github.com/Autonomy-Logic/openplc-editor#781](https://github.com/Autonomy-Logic/openplc-editor/issues/781) — `validateRuntimeVersion` literal-compare bug
+- [github.com/Autonomy-Logic/openplc-editor#782](https://github.com/Autonomy-Logic/openplc-editor/issues/782) — v4.1.x Editor cannot produce STruC++ bundles required by v4.1.x Runtime
+
+### 5. HMI version pin — "FUXA 1.3.2" → "FUXA 1.3.1 retained"
+
+The ADR's HMI decision section says "**HMI pick:** FUXA 1.3.2." Stop 4
+attempted the bump and rolled it back. **FUXA 1.3.2 introduces an
+undocumented plugin-architecture change that breaks pre-1.3.2 project
+DBs** — same `project.fuxap.db` device row that loaded cleanly on 1.3.1
+fails on 1.3.2 with `try to create OpenPLC but plugin is missing!`.
+See MASTER.md §21.
+
+The Gate 2 ADR's HMI rationale held that "same vendor minor version
+bump" was the **continuity** signal, not a specific 1.3.2 dependency.
+Staying on 1.3.1 satisfies the ADR's intent. The lab pin is now
+`frangoteam/fuxa:1.3.1`. A future FUXA upstream issue is staged for
+filing (`github.com/frangoteam/FUXA/issues`) — file:line evidence in
+FUXA 1.3.2 source not yet collected; deferred to filing time.
+
+### Summary of what stays unchanged
+
+The ADR's **Decision** (OpenPLC v4 over Beremiz/Codesys/pyModbus for
+PLC; FUXA over Ignition Maker/Scada-LTS/Node-RED Dashboard 2.0 for
+HMI), the **dismissed alternatives**, the **column structure** of the
+matrix, and the **Findings to re-validate** list — all stay
+authoritative. The five corrections above are operator-facing details
+that emerged during execution, not changes to the strategic choice.

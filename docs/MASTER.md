@@ -790,6 +790,161 @@ verifications section; v4 docs
 
 ---
 
+## Phase 3 Findings
+
+Phase 3 — PLC migration from OpenPLC v3 to v4 — surfaced findings §13–§23
+across 2026-05-25 (Gate 2 + Stops 1-2) and 2026-05-26 (Stops 3-6). §13
+and §14 landed in the Phase 2 Findings section above at commit bf69781
+(Gate 2 ADR shipping); §15-§23 below are dated 2026-05-26. All findings
+are append-only; corrections to earlier findings appear as inline
+acknowledgements in later findings, never as retroactive rewrites.
+
+### 15. OpenPLC v4 Modbus listening is a four-gate dependency chain (2026-05-26)
+
+**Source:** Phase 3 Stop 1 + Stop 2 empirical work — `ghcr.io/autonomy-logic/openplc-runtime` images v4.1.0-rc.1 and v4.1.0 pulled and characterized; logs captured during plugins.conf authoring + first program upload.
+
+**Summary:** The Phase 2 v4 spike (2026-05-21) framed v4's Modbus listener as gated on two conditions ("plugins.conf supplied AND PLC in RUN state"). Empirical characterization showed **four gates**:
+
+1. `plugins.conf` exists at `/workdir/plugins.conf` with a `modbus_slave` row enabled
+2. The plugin's `config.json` (referenced from `plugins.conf` column 5) overrides modbus_slave plugin's default port from 5020 → 502
+3. A compiled `libplc_*.so` exists in `/workdir/build/` (output of the runtime's compile step, triggered by `POST /api/upload-file` accepting a Editor-produced bundle)
+4. PLC is in RUN state (transitioned via authenticated `GET /api/start-plc`, which itself requires gate 3 satisfied)
+
+With gates 1+2 only, runtime logs `[ERROR] No libplc_*.so file found in ./build` → `[ERROR] Failed to set PLC state to RUNNING`; `GET /api/status` returns `STATUS:EMPTY`; `GET /api/start-plc` returns `START:ERROR`; port 502 stays silent. Verified empirically against v4.0.9 and v4.1.0.
+
+**Correction to §13/§14 framing:** the runtime config file is `plugins.conf`, NOT `drivers.cfg` as §13/§14 described. Load path is `./plugins.conf` relative to `/workdir`, per `plc_main.c:108` (v4.0.9) / `:110` (v4.1.0) and `plc_state_manager.c:246` / `:254`. The earlier "drivers.cfg" terminology was carried in from the original v4 spike notes; actual source uses `plugins.conf`.
+
+**Cross-refs:** `docs/decisions/0001-phase3-stack.md` Corrections forward; `plc/v4/plugins.conf` and `plc/v4/modbus_slave_config.json` (lab artifacts).
+
+### 16. OpenPLC Editor v4 desktop application is an architectural prerequisite, not optional (2026-05-26)
+
+**Source:** Phase 3 Stop 2/3 — empirical attempt to upload `tank_fill.st` via `POST /api/upload-file` failed with the runtime requiring a ZIP of post-MATIEC C files, not raw `.st`. Runtime source confirmed.
+
+**Summary:** The v4 runtime is genuinely headless — no MATIEC compiler ships in the runtime image. Editor README line 66 (verbatim): *"Compile in Editor - The Editor compiles locally (JSON → XML → ST → C files) and packages sources into program.zip"*. `POST /api/upload-file` expects a ZIP of post-MATIEC C files (`Config0.c`, `Res0.c`, `debug.c`, `glueVars.c`, `lib/`), not raw `.st`. Editor lives at `github.com/Autonomy-Logic/openplc-editor` (v4.1.4 installed during this session).
+
+**Implication for ADR 0001 "Migration cost" column:** the ADR said "Editor is a separate desktop application (wxPython)." This understated the requirement — Editor is the *mandatory* client-side half of the compile toolchain. The runtime cannot accept raw ST source. **Operators must install the Editor on Windows as a non-negotiable lab bring-up step.** This is captured in the ADR's Corrections forward.
+
+**Note on the Editor's stack:** v4.1.4 is Electron, not wxPython (the ADR's "wxPython" framing was carried forward from Beremiz comparison and was incorrect for v4 Editor). Installer is at `github.com/Autonomy-Logic/openplc-editor/releases`.
+
+### 17. OpenPLC v4 modbus_slave plugin default port is 5020, not 502 (2026-05-26)
+
+**Source:** Phase 3 Stop 2 — read of `simple_modbus.py:983 gPort = 5020` inside the runtime image. Verified on both v4.0.9 and v4.1.0 images.
+
+**Summary:** The modbus_slave Python plugin's default Modbus port is **5020**, not the standard 502. Standard-port operation requires explicit override via the plugin's `config.json` setting `network_configuration.port = 502`. This default is not documented in the upstream README; only visible by reading the plugin source.
+
+Lab `plc/v4/modbus_slave_config.json` ships this override:
+```json
+{ "network_configuration": { "host": "0.0.0.0", "port": 502 } }
+```
+
+The config file path is set in `plugins.conf` column 5 (`plugin_related_config_path`), resolved relative to the runtime's CWD (`/workdir`).
+
+### 18. Editor v4.1.x and Runtime v4.1.x are not wire-compatible (2026-05-26)
+
+**Source:** Phase 3 Stop 3 — empirical attempt to upload an Editor v4.1.4 MatIEC bundle to runtime v4.1.0 rejected with explicit pipeline-mismatch error. Source code confirmed.
+
+**Summary:** The v4.1.x **Runtime** ships a code-gen pipeline change ("STruC++") that rejects MatIEC artifacts. The v4.1.x **Editor** still produces MatIEC artifacts. The two are not wire-compatible despite carrying the same major-minor version.
+
+Empirical evidence:
+
+- Editor v4.1.4 `src/main/modules/compiler/compiler-module.ts` invokes `iec2c` (MatIEC) at line 433. The `OpenPLC Runtime v4` target branch at lines 1727-1755 adds `conf/*.json` files to the bundle but does NOT change the compiler. Full-tree code search for `strucpp` returns **zero matches**.
+- Runtime v4.1.0 `scripts/compile.sh` rejects bundles containing `Config0.c`/`glueVars.c`: *"core/generated contains MatIEC files. This runtime no longer supports MatIEC programs. Re-export the project from a STruC++-aware editor build."* The `webserver/restapi.py:38` docstring describes the design intent. Full-tree code search for `strucpp` in the runtime repo also returns **zero matches**.
+
+The runtime's error message references a "STruC++-aware editor build" that does not exist in any tagged Editor release.
+
+**Operator workaround applied:** pin runtime to `ghcr.io/autonomy-logic/openplc-runtime:v4.0.9` — last MatIEC-accepting final release (2026-03-05). v4.0.9 also emits literal `X-OpenPLC-Runtime-Version: v4` (vs v4.1.x's variable header), which conveniently sidesteps the separate Editor literal-compare bug (§19).
+
+**Correction to ADR 0001 "version pin":** ADR chose "OpenPLC v4 (Autonomy-Logic)" without specifying patch. Empirical landing is **v4.0.9 pinned**; v4.1.x is currently the broken combination. Captured in ADR Corrections forward.
+
+**Upstream issue filed:** [github.com/Autonomy-Logic/openplc-editor#782](https://github.com/Autonomy-Logic/openplc-editor/issues/782).
+
+### 19. Editor v4.1.4 validateRuntimeVersion literal-compare bug (2026-05-26)
+
+**Source:** Phase 3 Stop 3 — Editor's "Runtime Version Mismatch" popup observed against v4.1.0 runtime; source code traced.
+
+**Summary:** `src/utils/device.ts` in Editor v4.1.4 has a literal-string-compare bug in its runtime version-gate. `getExpectedRuntimeVersion()` regex-extracts major-only (`"v4"`) from the device target string. `validateRuntimeVersion()` then does literal `normalizedDetected !== expectedVersion` against the **un-normalized** full runtime header. Any runtime emitting a header more specific than `"v4"` (e.g., `"v4.1.0"`) trips a spurious mismatch popup at `board.tsx:236`, sets `connectionStatus='error'`, and disables the Play button.
+
+**Operator workaround:** runtime v4.0.9 emits literal `"v4"` (hardcoded in `restapi.py:38`), which matches the expected. v4.1.x runtimes emit the full release tag via the `RUNTIME_VERSION` build-time variable, which trips the bug. Combined with §18, v4.0.9 is the runtime pin that works around both upstream bugs.
+
+**Upstream issue filed:** [github.com/Autonomy-Logic/openplc-editor#781](https://github.com/Autonomy-Logic/openplc-editor/issues/781).
+
+### 20. Runtime's update_plugin_configurations disables plugins on bundle upload — read-only mount is load-bearing (2026-05-26)
+
+**Source:** Phase 3 Stop 3 first successful upload — runtime logs captured at 2026-05-26 16:43 UTC.
+
+**Summary:** Runtime's `handle_upload_file` calls `update_plugin_configurations(extract_dir)` which reads the existing `plugins.conf`, inspects the uploaded bundle for a `conf/` directory, and **disables every plugin** that doesn't have a matching conf file in the bundle. It then attempts to write the modified `plugins.conf` back to disk.
+
+The lab's `:ro` bind mount on `/workdir/plugins.conf` makes the write fail:
+
+```
+[2026-05-26 16:43:24] [ERROR] Failed to save plugin configuration to plugins.conf: [Errno 30] Read-only file system: 'plugins.conf'
+172.18.0.1 - - [26/May/2026 16:43:24] "POST /api/upload-file HTTP/1.1" 200 -
+[2026-05-26 16:43:25] [INFO] Plugin modbus_slave started successfully
+[2026-05-26 16:43:25] [INFO] PLC State: RUNNING
+```
+
+**This failure is causally load-bearing for the lab.** The disable-decision-then-write logic doesn't commit the in-memory disabled state until the write succeeds. Because the write fails before commit, modbus_slave stays enabled in the runtime's view, and is started successfully when the PLC enters RUN. **If the bind mount were `:rw`, modbus_slave would persist as disabled and port 502 would be silent.**
+
+**Forward fix to remove dependency on this accident:** populate the Editor project's `servers` section (Project Tree → Servers → add Modbus TCP server, port 502) so the bundle includes `conf/modbus_slave.json`. Then `update_plugin_configurations` keeps modbus_slave enabled by intent rather than by write-failure. Until that's authored in the Editor project, `:ro` discipline on `plugins.conf` is mandatory for the lab to function — not optional.
+
+### 21. FUXA 1.3.2 plugin-architecture change breaks pre-1.3.2 project DBs (2026-05-26)
+
+**Source:** Phase 3 Stop 4 attempt — FUXA 1.3.2 image pulled and run against the same `project.fuxap.db` that loaded cleanly on 1.3.1. Empirical log evidence captured.
+
+**Summary:** FUXA 1.3.2 introduces an undocumented plugin-architecture change that breaks devices defined in pre-1.3.2 project DBs. Same `project.fuxap.db` (device `OpenPLC`, type `ModbusTCP`) loads cleanly on FUXA 1.3.1 but fails on 1.3.2 with:
+
+```
+2026-05-26T16:55:52.637Z [WAR] 	try to create OpenPLC but plugin is missing!
+```
+
+(Version line in same logs: `FUXA V.1.3.2-2827`; matching 1.3.1 attempt: `FUXA V.1.3.1-2789` followed by `'OpenPLC' created` + `'OpenPLC' start` cleanly.) Device was never instantiated on 1.3.2 → no Modbus polling attempted → no ESTABLISHED conn in `/proc/net/tcp` → healthcheck failed.
+
+The "plugin is missing" warning text references the **device name** (`OpenPLC`) rather than the missing **plugin type** (ModbusTCP driver), which obscures the root cause; the actual missing component is the ModbusTCP driver presumably moved to a separate npm package.
+
+**Operator workaround applied:** pin FUXA at 1.3.1. Gate 2 ADR's HMI decision rationale was "same vendor minor version bump" — the *continuity* signal, not a specific 1.3.2 dependency. Staying on 1.3.1 satisfies the ADR's intent. Captured in ADR Corrections forward.
+
+**Upstream issue NOT YET filed** (Phase 3 Stop 6 outcome — staged in `~/.claude/projects/<project>/memory/phase3-migration-progress.md` Path Z section for filing at `github.com/frangoteam/FUXA/issues` later). file:line evidence in FUXA 1.3.2 source not yet collected; deferred to issue filing time.
+
+### 22. FUXA → openplc routing now rides ot_zone exclusively (2026-05-26)
+
+**Source:** Phase 3 Stop 4 cutover — `/proc/net/tcp` inspection inside FUXA after pointing the device DB at `openplc_v4:502`.
+
+**Summary:** FUXA→openplc Modbus polling rode mgmt_zone in the v3 era (Phase 2 Finding §2 — Docker DNS happened to resolve `openplc` to the mgmt_zone IP first). Post-Stop 4, FUXA polls `openplc_v4:502`. Since `openplc_v4` is attached to `ot_zone` only (mgmt_zone attachment intentionally deferred — see ADR Corrections forward), Docker DNS resolves to 172.18.0.5. FUXA's ESTABLISHED Modbus connection is now:
+
+```
+src 030012AC:*       (172.18.0.3:*  FUXA on ot_zone)
+dst 050012AC:01F6    (172.18.0.5:502  openplc_v4 on ot_zone)
+state 01             (ESTABLISHED)
+```
+
+**Implication for the lab's network architecture:** ot_zone is now genuinely the "process network" carrying Modbus traffic — closer to the architectural intent than the v3-era accidental mgmt_zone routing. The healthcheck IP hex was updated accordingly in docker-compose.yml (`050012AC:01F6`).
+
+**Implication for Suricata:** `$OPENPLC_IP` was updated to `[172.18.0.5]` in Stop 6 cleanup (removing the v3 IPs that the rollback-safety-net period required). `$FUXA_IP` retains `[172.18.0.3, 172.19.0.3]` — FUXA's IP didn't change, only the routing direction.
+
+### 23. Phase 3 Stop 5 Suricata SID re-baseline: zero regressions, single-variable fix (2026-05-26)
+
+**Source:** Phase 3 Stop 5 — all 13 Suricata SIDs (9000001-21 in the documented ranges) replayed against fresh v4-targeting attack pcaps captured from the temporarily-ot_zone-attached attacker container.
+
+**Summary:** All 13 SIDs validated against the v4 + FUXA-1.3.1 stack with **zero coverage regressions, zero false positives, zero rule retirements**. The migration's IDS impact was a single variable expansion: `$OPENPLC_IP` expanded from `[172.18.0.2,172.19.0.2]` to `[172.18.0.2,172.19.0.2,172.18.0.5]` during the coexistence window, then reduced to `[172.18.0.5]` in Stop 6 when v3 was removed from compose. **No rule text changes, no SID retirements.**
+
+Per-scenario results (live attacks captured from attacker, offline-replayed through Suricata 8.0.5):
+
+- **Scenario 1 (recon):** 9000001 ×1, 9000002 ×1, 9000003 ×1, 9000004 ×5. 9000005 (RST burst ≥15/10s) did not fire — same as Phase 2 against v3 (known non-determinism per Finding §8). 4 of 5 recon rules confirmed against v4-targeting traffic.
+- **Scenario 2 (Modbus FC scan):** 9000003 ×1, 9000010 ×1, 9000011 ×1, 9000012 ×2, 9000013 ×2, 9000014 ×2, 9000015 ×2, 9000020 ×2, 9000021 ×3. All 9 Modbus rules fire correctly on v4 IPs.
+- **Scenario 3 (alarm coil burst, 60 writes):** 9000003 ×1, **9000012 ×60**. **Exact match to Phase 2 count.**
+- **Scenario 4 (HR writes, 60 + 60 + 1):** 9000003 ×1, **9000013 ×121**. **Exact match to Phase 2 count.**
+- **Scenario 5 (replay attack):** 9000003 ×3, 9000013 ×1, 9000021 ×2 = 6 alerts. **Exact match to Phase 2 step 3c offline-replay against the original scenario-5 pcap.**
+
+Plus a protocol-level confirmation from scenario 5: v4 mutated-write of HR 1 = 4242 was overwritten back to 20 within ~1 scan, identically to v3. **v4's §5.3 reassertion property holds.** Same wire protocol, same detection signal, same defensive properties.
+
+Live captures retained at `captures/phase3-stop5-s{1..5}-*.pcap` (gitignored). Suricata replay output at `suricata/logs/stop5-s{1..5}/` (gitignored).
+
+**Stop 6 cleanup applied:** `$OPENPLC_IP` reduced to `[172.18.0.5]`; `$OPENPLC_WEB_PORTS` reduced to `[8443]` (v4 has no web UI on 8080). The Gate 2 ADR's "IDS rules regression risk: Moderate" column for OpenPLC v4 — empirical result is **Minimal** (variable scope only).
+
+---
+
+---
+
 ## Phase 2 Backlog (security operations on the Phase 1 stack — documented; not built)
 
 - [x] **Suricata passive monitoring** — sub-sessions 3a (recon detection,
@@ -828,18 +983,18 @@ verifications section; v4 docs
 ## Phase 3 Backlog (platform migration and zone hardening — documented; not built)
 
 - [ ] Tighten `mgmt_zone` ↔ `ot_zone` into a hard boundary (currently soft)
-- [ ] Migrate OpenPLC v3 → v4 (see spike findings 2026-05-21). v3 is upstream
-      EOL, and disaster recovery on 2026-05-21 is direct evidence — v4's
-      architecture may eliminate this class of state-drift brittleness. The
-      same-day verification spike confirmed v4 is fundamentally different
-      from v3: no web UI (REST API on port 8443 only, by design), Modbus
-      is an add-on plugin (`modbus_slave`) that loads at container start
-      but does not begin listening on port 502 until the PLC enters RUNNING
-      state, and the PLC cannot reach RUNNING without a compiled program
-      uploaded via the REST API (any HTTP client can drive that upload).
-      Migration is its own dedicated phase, not a drop-in image swap —
-      Phase 3 will need the REST-driven program upload workflow figured
-      out before v3-equivalent functionality is back online.
+- [x] **Migrate OpenPLC v3 → v4 — completed 2026-05-26 across Stops 1-6.**
+      Runtime pinned to v4.0.9 (NOT v4.1.x — wire-incompatible per §18).
+      Editor v4.1.4 installed on Windows host (mandatory prerequisite per
+      §16; not optional). FUXA pinned at 1.3.1 (1.3.2 broken per §21).
+      All 13 Suricata SIDs validated against the new stack with zero
+      regressions and a single-line `$OPENPLC_IP` update (§23). Two
+      upstream issues filed for the v4.1.x Editor↔Runtime incompatibility
+      and the Editor's literal-compare version-gate bug
+      (Autonomy-Logic/openplc-editor#781, #782). v3 service removed from
+      compose; v3 image kept on disk for forensic-only fallback.
+      Full migration history + corrections-forward in
+      `docs/decisions/0001-phase3-stack.md`.
 
 ---
 

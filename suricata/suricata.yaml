@@ -21,14 +21,19 @@ vars:
     EXTERNAL_NET: "!$HOME_NET"
     # Named hosts — pinned via docker-compose ipv4_address
     FUXA_IP: "[172.18.0.3,172.19.0.3]"
-    OPENPLC_IP: "[172.18.0.2,172.19.0.2]"
+    # Phase 3 Stop 6: reduced to single v4 IP. v3 service was removed from compose.
+    # v4 attached to ot_zone only (no mgmt_zone IP); FUXA→PLC poll rides ot_zone
+    # exclusively now (MASTER.md §22).
+    OPENPLC_IP: "[172.18.0.5]"
     # Operator-management sources (bridge gateways serve host-side traffic
     # post-NAT — host browser to openplc:8080 arrives from .1 on each net)
     MGMT_OPERATOR: "[172.18.0.1,172.19.0.1]"
 
   port-groups:
     MODBUS_PORT: "502"
-    OPENPLC_WEB_PORTS: "[8080,8443]"
+    # Phase 3 Stop 6: dropped 8080 (v3 web UI on 8080 no longer exists).
+    # v4 has no web UI — only REST API on 8443 (HTTPS, JWT-auth).
+    OPENPLC_WEB_PORTS: "[8443]"
     FUXA_HMI_PORT: "1881"
 
 default-rule-path: /etc/suricata/rules

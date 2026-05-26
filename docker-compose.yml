@@ -13,55 +13,56 @@
 services:
 
   # ---------------------------------------------------------------------------
-  # openplc — the PLC. Runs the tank-fill control logic and serves Modbus/TCP.
-  # Built from PINNED official upstream source (see plc/Dockerfile for the full
-  # supply-chain rationale — that "why" is part of the recruiter story).
+  # openplc_v4 — the PLC. OpenPLC Runtime v4 from the Autonomy-Logic fork
+  # (replaced v3 in Phase 3 migration, completed 2026-05-26). Image lives on
+  # GHCR, NOT Docker Hub. Pinned to v4.0.9 — the last MatIEC-accepting final
+  # release. See docs/decisions/0001-phase3-stack.md (Gate 2 decision) +
+  # Corrections forward, and MASTER.md §15-§23 (Phase 3 Findings).
   #
-  # Phase 2 step 3a — IPs pinned (ipv4_address) so Suricata rules referencing
-  # $OPENPLC_IP and $FUXA_IP have stable targets across restarts.
+  # Why v4.0.9 and not v4.1.x: Editor v4.1.x produces MatIEC output that
+  # v4.1.x Runtime rejects (it ships an unannounced STruC++ pipeline). v4.0.9
+  # is the last functional Editor↔Runtime combination. Upstream issue:
+  # github.com/Autonomy-Logic/openplc-editor/issues/782.
+  #
+  # No web UI on this runtime — port 8443 is REST API (HTTPS, JWT-auth).
+  # Pointing a browser at https://localhost:8443 shows nothing useful;
+  # connect via the OpenPLC Editor v4 desktop app instead.
   # ---------------------------------------------------------------------------
-  openplc:
-    build:
-      context: ./plc
-      dockerfile: Dockerfile
-    image: ot-ics-lab/openplc:v3-pinned     # local tag only; never pushed
-    container_name: otlab-openplc
+  openplc_v4:
+    image: ghcr.io/autonomy-logic/openplc-runtime:v4.0.9
+    container_name: otlab-openplc-v4
     restart: unless-stopped
+    cap_add:
+      # Per upstream docs/DOCKER.md — runtime needs these for scheduling.
+      - SYS_NICE
+      - SYS_RESOURCE
     networks:
       ot_zone:
-        ipv4_address: 172.18.0.2
-      mgmt_zone:
-        ipv4_address: 172.19.0.2
+        ipv4_address: 172.18.0.5
+      # mgmt_zone attachment is intentionally deferred to Stop 4 (FUXA
+      # cutover), when the IP planning matters for the legitimate poll path.
     ports:
-      # KNOWN GOTCHA — OpenPLC exposes TWO DIFFERENT ports:
-      #
-      #   8080  OpenPLC WEB EDITOR / management UI (human, browser)
-      #         WSL2: open http://localhost:8080 in the *Windows* browser.
-      - "8080:8080"
-      #
-      #   502   Modbus/TCP server (machine). FUXA talks to this.
-      #         Published to host ONLY so Wireshark / a Modbus client on
-      #         Windows can reach it. Container-to-container Modbus does NOT
-      #         use this published port (see the fuxa service note below).
-      - "502:502"
+      #   8443  v4 REST API (HTTPS, JWT-auth). Published so the OpenPLC
+      #         Editor desktop app (Windows) can reach it. NOT a web UI.
+      - "8443:8443"
+      # Port 502 deliberately NOT published — v3 still owns host:502 during
+      # the migration. v4's Modbus (once Stop 2 enables it) is reachable
+      # only from inside the ot_zone bridge at 172.18.0.5:502.
     volumes:
-      # OpenPLC v3 state is intermixed with code in webserver/ (DB, uploaded
-      # ST files, active program selection, "Auto-start PLC" flag). A named
-      # volume at the whole webserver/ dir captures the image's seeded content
-      # on first `up` and persists user state across container recreation.
-      # Asymmetric to FUXA's bind mount on appdata/ (FUXA's persistence dir is
-      # clean; OpenPLC's isn't) — full rationale in docs/MASTER.md.
-      #
-      # GOTCHA: changing OPENPLC_COMMIT in plc/Dockerfile requires
-      # `docker compose down -v` before the next --build, otherwise the volume
-      # keeps the old commit's webserver code. README Troubleshooting documents.
-      - openplc_state:/opt/OpenPLC_v3/webserver
-    # Least-privilege (DELIBERATE — recruiter talking point): upstream's
-    # sample run command uses --privileged for GPIO/hardware I/O. This lab
-    # has no hardware, so privileged mode is intentionally NOT set. Rationale
-    # repeated in README.md and docs/network-security.md.
-    # VERIFY-ON-FIRST-RUN: if the runtime misbehaves without privileged, the
-    # documented fallback lives in README.md (Troubleshooting).
+      # State persistence per upstream docs/DOCKER.md.
+      # /var/run/runtime contains: .env (JWT secret + DB URI), restapi.db
+      # (user accounts SQLite), runtime socket files.
+      - openplc_v4_state:/var/run/runtime
+      # plugins.conf — declares the modbus_slave plugin. Read-only mount;
+      # authored on the host so it survives `docker compose down -v`.
+      # File format documented inside the file. Plugin config schema and
+      # the actual mounted-to path documented in MASTER.md §14 follow-up.
+      - ./plc/v4/plugins.conf:/workdir/plugins.conf:ro
+      # modbus_slave plugin config — overrides the plugin's default port
+      # 5020 to the standard Modbus port 502. Bound at /workdir/ because
+      # the path in plugins.conf column 5 (./modbus_slave_config.json) is
+      # resolved relative to the runtime's CWD which is /workdir.
+      - ./plc/v4/modbus_slave_config.json:/workdir/modbus_slave_config.json:ro
 
   # ---------------------------------------------------------------------------
   # fuxa — the HMI. The screen an operator looks at. Talks Modbus/TCP to
@@ -71,11 +72,11 @@ services:
   # variable resolves to a stable address across restarts.
   # ---------------------------------------------------------------------------
   fuxa:
-    image: frangoteam/fuxa:1.3.1            # verified real tag; no moving "latest"
+    image: frangoteam/fuxa:1.3.1            # Pinned at 1.3.1 deliberately. 1.3.2 attempted during Phase 3 Stop 4 — plugin-architecture change broke pre-1.3.2 project DBs (MASTER.md §21). DB connection target is openplc_v4:502.
     container_name: otlab-fuxa
     restart: unless-stopped
     depends_on:
-      - openplc
+      - openplc_v4
     networks:
       ot_zone:
         ipv4_address: 172.18.0.3
@@ -91,21 +92,24 @@ services:
       # is LOST on container recreation. This persists it to ./fuxa/appdata.
       # /usr/src/app/FUXA/server/_appdata is FUXA's documented data directory.
       - ./fuxa/appdata:/usr/src/app/FUXA/server/_appdata
-    # KNOWN GOTCHA — FUXA -> OpenPLC Modbus link:
+    # KNOWN GOTCHA — FUXA -> openplc_v4 Modbus link:
     # Inside the FUXA web UI, the Modbus device host MUST be the service name
-    #   openplc   on port   502   — NOT localhost, NOT 127.0.0.1.
+    #   openplc_v4   on port   502   — NOT localhost, NOT 127.0.0.1.
     # Containers reach each other by service name on a shared network
-    # (ot_zone). "localhost" inside the FUXA container is FUXA itself. This
-    # is the most common first-time failure; step-by-step fix in README.md.
-    # Healthcheck — detect silent Modbus client drops. FUXA 1.3.1's ModbusTCP
-    # driver has no auto-reconnect; when the connection silently dies the HMI
+    # (ot_zone). "localhost" inside the FUXA container is FUXA itself.
+    # Connection target is persisted in fuxa/appdata/project.fuxap.db.
+    #
+    # Healthcheck — detect silent Modbus client drops. FUXA's ModbusTCP
+    # driver has no auto-reconnect (Phase 2 Finding §10, ecosystem-wide
+    # per Gate 2 ADR research). When the connection silently dies the HMI
     # freezes without logging. Probe: /proc/net/tcp inside the container for
-    # an ESTABLISHED conn (state 01) to openplc:502 on either bridge IP.
-    # Hex: 020013AC=172.19.0.2 (mgmt), 020012AC=172.18.0.2 (ot); 01F6=502.
+    # an ESTABLISHED conn (state 01) to the Modbus target on port 502.
+    #   050012AC:01F6 = 172.18.0.5:502 (openplc_v4 on ot_zone)
     # On unhealthy: `docker compose up -d --force-recreate fuxa`.
-    # Investigation: docs/phase2/detection/3b-modbus-protocol.md (held items).
+    # FUXA→openplc routing rides ot_zone exclusively now (MASTER.md §22);
+    # was mgmt_zone in the v3 era per Phase 2 Finding §2.
     healthcheck:
-      test: ["CMD-SHELL", "awk '$4==\"01\" && ($3==\"020013AC:01F6\" || $3==\"020012AC:01F6\")' /proc/net/tcp | grep -q ."]
+      test: ["CMD-SHELL", "awk '$4==\"01\" && $3==\"050012AC:01F6\"' /proc/net/tcp | grep -q ."]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -219,11 +223,11 @@ networks:
     # boundary this lab demonstrates. Full rationale in docs/MASTER.md.
 
 # -----------------------------------------------------------------------------
-# Volumes — Docker-managed persistence for OpenPLC state. Named volume (not a
-# bind mount) because OpenPLC's state lives intermixed with code in webserver/,
-# so first-up needs Docker's "seed empty volume with image contents" semantics
-# rather than the FUXA-style empty-host-dir bind mount.
+# Volumes — Docker-managed persistence for OpenPLC v4 runtime state.
+# /var/run/runtime inside the container holds .env (JWT secret + DB URI),
+# restapi.db (user accounts SQLite), and runtime sockets. Named volume
+# survives `docker compose down`; loses contents only on `docker compose down -v`.
 # -----------------------------------------------------------------------------
 volumes:
-  openplc_state:
-    name: otlab_openplc_state
+  openplc_v4_state:
+    name: otlab_openplc_v4_state
