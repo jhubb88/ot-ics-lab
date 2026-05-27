@@ -181,6 +181,160 @@ services:
       - "-i"
       - "eth1"
 
+  # ---------------------------------------------------------------------------
+  # influxdb — Queue Item 1. The historian — time-series store for PLC metrics.
+  # Per ADR 0002 (docs/decisions/0002-historian-stack.md), pinned to v2.9.1
+  # explicitly. Docker Hub's `influxdb:latest` tag began pointing at v3 Core
+  # on 2026-05-27 (the day of the ADR). v3 is a different product (Apache
+  # Arrow storage, no Flux, 72-hour query cap). DO NOT change this pin
+  # without an ADR amendment.
+  #
+  # Initial setup runs once on first start, driven by DOCKER_INFLUXDB_INIT_*
+  # vars. The image's entrypoint script reads them on a cold start of
+  # /var/lib/influxdb2 only — changes to .env after first start have NO
+  # effect on a running InfluxDB. To re-run setup, delete the
+  # otlab_influxdb_data volume.
+  #
+  # mgmt_zone only — InfluxDB must not be reachable from ot_zone. Only
+  # Telegraf bridges the two zones (per ADR 0002 network plan).
+  # ---------------------------------------------------------------------------
+  influxdb:
+    image: influxdb:2.9.1
+    container_name: otlab-influxdb
+    restart: unless-stopped
+    environment:
+      # First-run setup mode. After volume is populated, subsequent starts
+      # ignore the rest of these vars.
+      DOCKER_INFLUXDB_INIT_MODE: setup
+      # Maps .env's INFLUXDB_INIT_* (Option A: keep .env clean of DOCKER_
+      # prefix; translate here, where it belongs) -> the env-var names the
+      # image's entrypoint actually expects.
+      DOCKER_INFLUXDB_INIT_USERNAME: ${INFLUXDB_INIT_USERNAME}
+      DOCKER_INFLUXDB_INIT_PASSWORD: ${INFLUXDB_INIT_PASSWORD}
+      DOCKER_INFLUXDB_INIT_ORG: ${INFLUXDB_INIT_ORG}
+      DOCKER_INFLUXDB_INIT_BUCKET: ${INFLUXDB_INIT_BUCKET}
+      DOCKER_INFLUXDB_INIT_RETENTION: ${INFLUXDB_INIT_RETENTION}
+      DOCKER_INFLUXDB_INIT_ADMIN_TOKEN: ${INFLUXDB_INIT_ADMIN_TOKEN}
+    networks:
+      - mgmt_zone
+    ports:
+      #   8086  InfluxDB v2 HTTP API + web UI. WSL2: http://localhost:8086
+      #         from the WINDOWS browser.
+      - "8086:8086"
+    volumes:
+      # Time-series data + WAL + metadata. Bulk of disk usage lives here.
+      - influxdb_data:/var/lib/influxdb2
+      # CLI configs / operator profile. Small, but separate per upstream
+      # convention so re-init of /var/lib doesn't wipe the operator config.
+      - influxdb_config:/etc/influxdb2
+    healthcheck:
+      # `influx ping` is in the image, needs no auth, returns 0 when the
+      # HTTP API is up. Used by Telegraf's depends_on: service_healthy to
+      # wait through the one-shot setup phase before its first write.
+      test: ["CMD-SHELL", "influx ping || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  # ---------------------------------------------------------------------------
+  # telegraf — Queue Item 1. The collector. Reads OpenPLC v4 over Modbus TCP
+  # and writes line-protocol metrics to InfluxDB. Per ADR 0002, pinned to
+  # 1.38.4-alpine. Configuration lives in ./telegraf/telegraf.conf, bind-
+  # mounted :ro so Telegraf cannot rewrite its own config (matches the
+  # load-bearing :ro pattern from MASTER.md §20 for plugins.conf).
+  #
+  # Multi-homed on ot_zone + mgmt_zone — the deliberate IT/OT bridge pattern
+  # from ADR 0002. Telegraf reads the PLC on ot_zone and writes to InfluxDB
+  # on mgmt_zone. Future Suricata rules targeting the bridge traffic will
+  # key on this exact placement.
+  #
+  # depends_on InfluxDB with condition: service_healthy so Telegraf waits
+  # for the one-shot initial setup to complete before its first write
+  # attempt. Without this gate, Telegraf's first batch lands while InfluxDB
+  # is still mid-setup and the bucket / token / org don't exist yet.
+  # ---------------------------------------------------------------------------
+  telegraf:
+    image: telegraf:1.38.4-alpine
+    container_name: otlab-telegraf
+    restart: unless-stopped
+    # Defense in depth: inject ONLY the three vars Telegraf needs to write
+    # to InfluxDB. Avoids leaking GRAFANA_ADMIN_PASSWORD, INFLUXDB_INIT_
+    # USERNAME, INFLUXDB_INIT_PASSWORD, etc. into this container's env
+    # (which env_file: .env would have done).
+    environment:
+      INFLUXDB_INIT_ADMIN_TOKEN: ${INFLUXDB_INIT_ADMIN_TOKEN}
+      INFLUXDB_INIT_ORG: ${INFLUXDB_INIT_ORG}
+      INFLUXDB_INIT_BUCKET: ${INFLUXDB_INIT_BUCKET}
+    volumes:
+      - ./telegraf/telegraf.conf:/etc/telegraf/telegraf.conf:ro
+    networks:
+      - ot_zone
+      - mgmt_zone
+    depends_on:
+      influxdb:
+        condition: service_healthy
+    healthcheck:
+      # `pgrep telegraf` succeeds as long as the daemon is alive. Cheap
+      # liveness probe — does NOT verify Modbus polls are working. For
+      # that, check `docker logs otlab-telegraf` directly.
+      test: ["CMD-SHELL", "pgrep telegraf || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  # ---------------------------------------------------------------------------
+  # grafana — Queue Item 1. Visualization layer. Per ADR 0002, pinned to
+  # 13.0.1-security-01 (security-patched release of 13.0.1). DO NOT use
+  # :latest — Grafana's `latest` tag has historically moved between major
+  # versions without warning.
+  #
+  # Admin creds set from .env on first start. Subsequent changes to .env
+  # do NOT update an existing admin user — change the password via the
+  # Grafana UI / API after first start, or delete the otlab_grafana_data
+  # volume to re-run the first-start path.
+  #
+  # mgmt_zone only. Browser access via http://localhost:3000 — the
+  # published port goes to the WINDOWS host (WSL2 + Docker Desktop).
+  # ---------------------------------------------------------------------------
+  grafana:
+    image: grafana/grafana:13.0.1-security-01
+    container_name: otlab-grafana
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD}
+      # Defense in depth: inject ONLY the three InfluxDB vars Grafana's
+      # provisioning needs. Avoids leaking GRAFANA_ADMIN_PASSWORD or the
+      # InfluxDB INIT_USERNAME / INIT_PASSWORD into this container. Read by
+      # grafana/provisioning/datasources/influxdb.yml via ${VAR} expansion.
+      INFLUXDB_INIT_ORG: ${INFLUXDB_INIT_ORG}
+      INFLUXDB_INIT_BUCKET: ${INFLUXDB_INIT_BUCKET}
+      INFLUXDB_INIT_ADMIN_TOKEN: ${INFLUXDB_INIT_ADMIN_TOKEN}
+    networks:
+      - mgmt_zone
+    ports:
+      #   3000  Grafana web UI. WSL2: http://localhost:3000 from the
+      #         WINDOWS browser.
+      - "3000:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      # Datasource provisioning. :ro per the load-bearing pattern — Grafana
+      # cannot rewrite its own provisioning. UI edits to provisioned
+      # datasources are overwritten on next container start.
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+    depends_on:
+      - influxdb
+    healthcheck:
+      # /api/health is Grafana's documented healthcheck endpoint and
+      # needs no auth. wget --spider checks status only, no body download.
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:3000/api/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
 # -----------------------------------------------------------------------------
 # Networks — explicit zoning. This segmentation IS the point of the lab.
 # Honest scope note (expanded in docs/network-security.md): in Phase 1 both
@@ -223,11 +377,21 @@ networks:
     # boundary this lab demonstrates. Full rationale in docs/MASTER.md.
 
 # -----------------------------------------------------------------------------
-# Volumes — Docker-managed persistence for OpenPLC v4 runtime state.
-# /var/run/runtime inside the container holds .env (JWT secret + DB URI),
-# restapi.db (user accounts SQLite), and runtime sockets. Named volume
-# survives `docker compose down`; loses contents only on `docker compose down -v`.
+# Volumes — Docker-managed persistence. Named volumes survive
+# `docker compose down`; lose contents only on `docker compose down -v`.
+#   openplc_v4_state  — /var/run/runtime in OpenPLC: JWT secret + DB URI
+#                       (.env), restapi.db (user accounts), runtime sockets.
+#   influxdb_data     — /var/lib/influxdb2: time-series data + WAL + metadata.
+#   influxdb_config   — /etc/influxdb2: CLI configs + operator profile.
+#   grafana_data      — /var/lib/grafana: dashboards, users, datasources,
+#                       sessions (SQLite-backed).
 # -----------------------------------------------------------------------------
 volumes:
   openplc_v4_state:
     name: otlab_openplc_v4_state
+  influxdb_data:
+    name: otlab_influxdb_data
+  influxdb_config:
+    name: otlab_influxdb_config
+  grafana_data:
+    name: otlab_grafana_data

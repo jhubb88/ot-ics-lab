@@ -45,3 +45,8 @@ plc/v4/editor-project/build/
 # binary blobs. Distribute PDFs out-of-band (email / file share / GitHub
 # Releases) rather than committed.
 docs/cheatsheets/
+
+# --- Secrets / credentials ------------------------------------------------
+# .env carries the InfluxDB admin token and Grafana admin password — never
+# commit. Use .env.example as the public template; .env stays local.
+.env

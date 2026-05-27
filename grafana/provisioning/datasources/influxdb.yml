@@ -1,0 +1,34 @@
+# =============================================================================
+# OT/ICS Security Lab — Grafana datasource provisioning
+# =============================================================================
+# Auto-configures the InfluxDB v2 datasource at Grafana startup. Provisioned
+# on every container start — UI edits to this datasource will be OVERWRITTEN
+# on the next Grafana restart. To change the datasource, edit this YAML and
+# recreate the Grafana container.
+#
+# Secrets (the InfluxDB admin token) are pulled from the Grafana container's
+# environment via ${VAR} expansion — they do NOT appear in this file.
+# The Grafana service block in docker-compose.yml is what injects those env
+# vars into the container; this file references them by name only.
+# =============================================================================
+apiVersion: 1
+
+datasources:
+  - name: InfluxDB
+    type: influxdb
+    access: proxy
+    # Docker DNS name on mgmt_zone — Grafana and InfluxDB share this bridge.
+    # NOT localhost: "localhost" inside the Grafana container is Grafana itself.
+    url: http://otlab-influxdb:8086
+    jsonData:
+      # Use InfluxDB v2's Flux query language. InfluxQL is also available; Flux
+      # is the default for v2 and matches the Telegraf write format.
+      version: Flux
+      organization: ${INFLUXDB_INIT_ORG}
+      defaultBucket: ${INFLUXDB_INIT_BUCKET}
+    secureJsonData:
+      # Operator token. Read at Grafana startup from the container env;
+      # Grafana stores it encrypted at rest in /var/lib/grafana.
+      token: ${INFLUXDB_INIT_ADMIN_TOKEN}
+    isDefault: true
+    editable: true
