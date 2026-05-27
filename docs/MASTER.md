@@ -7,9 +7,9 @@ of the deliverable, not just the plumbing.
 
 - **Project:** Vendor-neutral OT/ICS security lab (portfolio / recruiter-facing)
 - **Process simulated:** Generic plant tank-fill (level, pump, valve, high alarm)
-- **Phase:** 1 of 3 (Phase 1 complete; Phase 2 = security work on v3, Phase 3 = platform migration + zone hardening)
+- **Phase:** Phases 1–3 complete. Queue Item 1 (historian stack) and Queue Item 3 (runbook expansion) shipped 2026-05-27. Queue Item 2 (attack-execution docs against the v4 stack) remaining.
 - **Phase 1 status:** **Acceptance gate fully met — runtime, visual HMI, and Modbus/TCP capture all proven end-to-end** (see Acceptance Gate)
-- **Last updated:** 2026-05-24
+- **Last updated:** 2026-05-27
 - **Repo:** `<repo-root>` (your local clone location; absolute path is environment-specific)
 
 ---
@@ -942,6 +942,247 @@ Live captures retained at `captures/phase3-stop5-s{1..5}-*.pcap` (gitignored). S
 **Stop 6 cleanup applied:** `$OPENPLC_IP` reduced to `[172.18.0.5]`; `$OPENPLC_WEB_PORTS` reduced to `[8443]` (v4 has no web UI on 8080). The Gate 2 ADR's "IDS rules regression risk: Moderate" column for OpenPLC v4 — empirical result is **Minimal** (variable scope only).
 
 ---
+
+## Queue Item 1 Findings
+
+Queue Item 1 — the historian + visualization + collector stack
+(InfluxDB v2 + Telegraf + Grafana) — completed 2026-05-27 in
+commit 764dacc. ADR is `docs/decisions/0002-historian-stack.md`.
+Findings §24–§29 below were surfaced during the build (Stops 1–5)
+and document the gotchas captured for future runbook updates and
+Phase 4+ tool-selection work.
+
+### 24. InfluxDB v2 Docker `latest` tag flipped to v3 Core on 2026-05-27; pinning is now load-bearing in a way it normally isn't (2026-05-27)
+
+**Source:** ADR 0002 verification step (2026-05-27) — Docker Hub
+`https://hub.docker.com/_/influxdb` and the InfluxData install doc
+`https://docs.influxdata.com/influxdb/v2/install/` both surface the
+flip explicitly. The install doc shows the literal banner:
+*"On May 27, 2026, the `latest` tag for InfluxDB Docker images will
+point to InfluxDB 3 Core."*
+
+**Summary:** On 2026-05-27 the official `influxdb` image's `latest`
+tag stopped pointing at v2 and started pointing at v3 Core. v3 is
+not a minor version bump — it is a different product:
+
+- Apache Arrow + Parquet storage engine (vs v2's Time-Structured
+  Merge Tree)
+- No Flux query language (SQL-first via Flight SQL only)
+- 72-hour default single-query range cap in Core (config-raisable;
+  lifted entirely only in Enterprise)
+- Larger RAM footprint at idle and during compaction (per
+  QuestDB-published benchmark of the v3 Core alpha)
+
+ADR 0002 pinned `influxdb:2.9.1` explicitly to protect against
+this. This finding documents the flip as the reason — so anyone
+reading the compose file later understands why the pin is not
+stylistic.
+
+**Implication:** Any compose snippet, blog post, or AI completion
+that says `image: influxdb:latest` from 2026-05-27 forward will
+silently land on v3 Core. For this lab the difference is a
+different storage engine, no Flux, and the 72-hour query cap —
+none of which matches what the Telegraf integration or future
+Grafana dashboards assume. Pinning `:2.9.1` is the only safe shape.
+
+**Sources:** ADR 0002 `docs/decisions/0002-historian-stack.md`;
+`https://docs.influxdata.com/influxdb/v2/install/`;
+`https://hub.docker.com/_/influxdb`.
+
+### 25. Telegraf is the only OSS collector with first-class Modbus input + native InfluxDB output (2026-05-27)
+
+**Source:** ADR 0002 collector-role evaluation —
+`docs/decisions/0002-historian-stack.md` "Collector role" section.
+Reference finding for future tool-selection work.
+
+**Summary:** Telegraf 1.38's `inputs.modbus` plugin is the only
+OSS collector with a first-class, actively-maintained Modbus input
+plugin paired with a native InfluxDB output. The closest
+alternatives — Node-RED + `node-red-contrib-modbus`, custom Python
+with `pymodbus`, Apache NiFi `GetModbusTCP` — are either
+heavier-weight (NiFi JVM footprint; NiFi processor is
+contributed-non-core) or impose more code/flow authoring than the
+role warrants (Node-RED flow plumbing; pymodbus is a library, not
+a daemon). None of them is a serious peer for the specific
+PLC → InfluxDB job. Telegraf's `inputs.modbus` + `outputs.influxdb_v2`
+is a zero-configuration handshake (set URL, token, org, bucket —
+done).
+
+**Implication:** For Phase 4+ tool selection decisions involving
+Modbus collection, Telegraf is the default. Switching away should
+require an explicit justification, the same way the tool-selection
+discipline established in Phase 2 requires for any
+deprecated-upstream substitution. The structural reason —
+first-party paired plugins, not glue code — is durable across
+Telegraf versions.
+
+**Sources:** ADR 0002 `docs/decisions/0002-historian-stack.md`
+Collector role; Telegraf modbus plugin README
+`https://github.com/influxdata/telegraf/blob/v1.38.4/plugins/inputs/modbus/README.md`.
+
+### 26. Telegraf 1.38 modbus plugin `byte_order` requires 4-character form even for 16-bit fields (2026-05-27)
+
+**Source:** Queue Item 1 Stop 4 — Telegraf container crashlooped
+immediately after first start:
+
+```
+E! [telegraf] Error running agent: could not initialize input
+   inputs.modbus: configuration invalid for device "openplc_v4":
+   unknown byte-order "AB"
+```
+
+**Summary:** The Telegraf 1.38 modbus plugin's request-style
+configuration accepts only four `byte_order` values: `ABCD`,
+`DCBA`, `BADC`, `CDAB`. Two-character forms (`AB`, `BA`) are
+rejected. The plugin uses the same 4-character form for all field
+widths — only the first two characters are semantically meaningful
+for 16-bit fields, but the literal 4-character value is still
+required syntactically.
+
+For OpenPLC's `modbus_slave` plugin (which writes Modbus-standard
+big-endian), the correct value is `byte_order = "ABCD"` regardless
+of whether the field is INT16 or INT32.
+
+Initial Stop 2 draft of `telegraf/telegraf.conf` used
+`byte_order = "AB"` based on incorrect intuition about half-of-ABCD
+for 16-bit fields. Caught at runtime via container crashloop;
+verified against the v1.38.4 README which states the 4-character
+forms are the only accepted values.
+
+**Implication:** For any future Telegraf modbus config in this
+lab, `byte_order = "ABCD"` is the canonical big-endian value.
+Coil and discrete-input fields do NOT need a `byte_order` at all —
+the README's `*2` footnote documents that the field is ignored
+for those register types. Lesson generalised: when verifying ONE
+field in a plugin config against upstream source, verify EVERY
+field in the same block in the same lookup pass — cheaper than
+catching a second mismatch at runtime.
+
+**Sources:** Telegraf modbus plugin README
+`https://github.com/influxdata/telegraf/blob/v1.38.4/plugins/inputs/modbus/README.md`;
+lab artifact `telegraf/telegraf.conf` (commit 764dacc).
+
+### 27. Docker Desktop on Windows + WSL2 caches bind-mount source paths in the container mount manifest — `restart` does NOT propagate host-file edits (2026-05-27)
+
+**Source:** Queue Item 1 Stop 4 — applying the §26 `byte_order`
+fix to `telegraf/telegraf.conf` and trying to restart the container.
+
+**Summary:** When a bind-mounted host file is edited while the
+container is running on Docker Desktop on Windows + WSL2, the
+change does NOT propagate to the container via `docker compose
+restart <service>`. Docker Desktop's WSL2 bind-mount mirror caches
+the resolved source path in the container's mount manifest (under
+`/run/desktop/mnt/host/wsl/docker-desktop-bind-mounts/Ubuntu/<hash>`).
+Restart reuses that stale manifest. Two failure modes:
+
+1. **Silent staleness** — `restart` succeeds, the container
+   starts, and reads the OLD file contents from the cached mirror.
+   The host file change has no effect.
+2. **Bind-mount race** — if Docker Desktop has garbage-collected
+   the cached path, `restart` fails with
+   `runc create failed: error mounting ... no such file or directory`
+   on the bind-mount source. Sibling failure mode to the
+   pre-existing "mkdir ... file exists" race during
+   `docker compose up` that the operator runbook documents
+   alongside this finding.
+
+After applying the §26 fix to telegraf.conf on disk, the container
+continued to log the same `unknown byte-order "AB"` error on
+subsequent restart attempts. Plain `docker compose restart` did
+not propagate the change; `docker compose up -d --force-recreate
+telegraf` did. The bind-mount cache behavior described above is
+the most likely explanation; the recovery is documented regardless
+of root cause.
+
+**Recovery:** `docker compose up -d --force-recreate <service>`
+re-resolves the bind-mount source against the current host file.
+Equivalent: `docker compose down <service>` followed by
+`docker compose up -d <service>`. Plain `docker compose restart`
+is insufficient for any bind-mount-backed config change on this
+platform.
+
+**Implication:** Operator runbook needs an explicit "edit a
+bind-mounted config → must `--force-recreate`" entry. Now sibling
+content to the existing "mkdir ... file exists" bind-mount race
+in the runbook's troubleshooting section. Both are Docker
+Desktop / WSL2 mount-mirror behavior, not bugs in any specific
+container — they are structural to the platform.
+
+**Sources:** Lab logs from Queue Item 1 Stop 4 (2026-05-27).
+Docker Desktop's WSL2 bind-mount documentation does NOT call out
+this caching behavior explicitly — the rule was derived empirically
+and is documented here as institutional knowledge.
+
+### 28. Grafana v13 deprecated `/api/datasources/name/{name}/health` — use `/api/datasources/uid/{uid}/health` (2026-05-27)
+
+**Source:** Queue Item 1 Stop 5 — datasource health verification step.
+
+**Summary:** Grafana v13.0.1's HTTP API no longer routes
+`/api/datasources/name/{name}/health`. The name-based health
+endpoint returns `404 {"message":"Not found"}` with the access log
+line `handler=notfound`. The path is not just unimplemented — it
+is actively unrouted. The UID-based endpoint at
+`/api/datasources/uid/{uid}/health` works as expected and returns
+the proper `{"status":"OK","message":"datasource is working. N
+buckets found"}` payload for a working InfluxDB datasource.
+
+The datasource UID is visible at `GET /api/datasources` (the list
+endpoint, which IS still routed). For provisioned datasources
+Grafana auto-generates the UID at startup; the value also appears
+in the provisioning log line:
+`msg="inserting datasource from configuration" name=<name> uid=<uid>`.
+
+**Implication:** Any future operator playbook or smoke-test script
+that uses the name-based health endpoint will see 404 and may
+wrongly conclude provisioning failed. Runbook entries need to use
+the UID-based URL going forward, or fetch the UID first via the
+list endpoint.
+
+**Sources:** Lab logs from Queue Item 1 Stop 5 (2026-05-27);
+Grafana 13 HTTP API docs
+`https://grafana.com/docs/grafana/v13.0/developers/http_api/data_source/`.
+
+### 29. Operational consequence of §15: `docker compose down` triggers a manual PLC re-upload via Editor v4 before Modbus listens again (2026-05-27)
+
+**Source:** Queue Item 1 Stop 4 — Telegraf container went healthy
+but Modbus polls returned `connection refused on 172.18.0.5:502`
+for ~3 minutes until the operator brought the PLC to RUN state
+through the Editor.
+
+**Summary:** Finding §15 documents OpenPLC v4 Modbus listening as
+a 4-gate chain. Two gates (`plugins.conf` + `modbus_slave_config.json`)
+are bind-mounted from the host and survive any container lifecycle.
+Two gates (compiled `libplc_*.so` + PLC RUN state) live inside the
+container — the `.so` in `/workdir/build/`, the RUN state in-memory.
+
+A `docker compose down` (or `down -v`) removes the container,
+which erases the in-container gates. On the next `docker compose
+up -d`, the runtime starts cleanly but logs `[ERROR] No libplc_*.so
+file found in ./build` and `[ERROR] Failed to set PLC state to
+RUNNING` — and port 502 stays dark. The bind-mounted config is
+fine; only the compiled program and RUN state are missing, and
+both require an Editor v4 upload + Compile + Run cycle that has
+not happened yet.
+
+In contrast, `docker compose stop` pauses the container without
+destroying it. On `docker compose start` the compiled `.so` is
+still in `/workdir/build/` and the PLC transitions back to RUN
+automatically. No Editor action needed.
+
+**Practical rule:** `stop` = no re-upload needed. `down` =
+re-upload needed. This is captured as a bold callout in the
+operator runbook §2 (Daily stop) as part of the Queue Item 1
+runbook update.
+
+**Implication:** For any operator-facing daily workflow this is
+a sharp distinction. The runbook calls out the rule explicitly so
+a first-time operator doesn't run `down` for routine maintenance
+and find themselves trying to diagnose a silent Modbus port when
+the real recovery is "go open the Editor and re-upload."
+
+**Sources:** Finding §15 (the 4-gate chain this operationalizes);
+lab observation from Queue Item 1 Stop 4 (2026-05-27); operator
+runbook §2 + §3 (Queue Item 1 update, this commit).
 
 ---
 

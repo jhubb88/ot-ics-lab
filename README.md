@@ -342,6 +342,9 @@ ot-ics-lab/
 Phase 1 build progress is tracked in **`docs/MASTER.md`** (single source of
 truth). Phase 2 and Phase 3 backlogs are listed there too.
 
+**Queue Item 1 (2026-05-27):** Historian + visualization stack added —
+InfluxDB v2 + Telegraf + Grafana. ADR: `docs/decisions/0002-historian-stack.md`.
+
 ---
 
 ## License

@@ -29,6 +29,20 @@ What "working" looks like:
 
 If the tank is frozen at one value or shows nothing, see §7 below.
 
+### Bookmarks for daily access
+
+Make a Chrome bookmark folder called "OT Lab" with these four entries:
+
+| URL | What it is |
+|---|---|
+| http://localhost:1881 | FUXA HMI (operator screen — the tank display) |
+| http://localhost:3000 | Grafana dashboards (historian visualization) |
+| http://localhost:8086 | InfluxDB web UI (time-series database) |
+| https://localhost:8443 | OpenPLC runtime (Editor connects here; web UI exists at this address but daily operation uses the Editor) |
+
+Right-click the folder → **Open all** brings up the entire daily
+working set in one gesture.
+
 ---
 
 ## 2. Daily stop
@@ -63,6 +77,8 @@ What persists across each operation:
 | FUXA project / device config (bind mount) | ✅ | ✅ | ✅ |
 | Suricata logs (bind mount) | ✅ | ✅ | ✅ |
 
+**Practical rule:** `stop` = no re-upload needed. `down` = re-upload needed.
+
 Default daily stop is `docker compose stop` — fast, preserves everything.
 
 ---
@@ -71,6 +87,9 @@ Default daily stop is `docker compose stop` — fast, preserves everything.
 
 Only needed when changing the simulation logic itself. Not part of
 daily operation.
+
+This same procedure is also what to run after any `docker compose
+down` — see §2 for why.
 
 1. Start the lab: `docker compose up -d` (per §1)
 2. On Windows: open **OpenPLC Editor v4** (start menu or
@@ -237,6 +256,57 @@ edit:
 ```bash
 docker compose restart suricata
 ```
+
+**`docker compose up` fails with "mkdir ... file exists" on a bind mount:**
+
+Docker Desktop / WSL2 bind-mount race. First fix: retry.
+
+```bash
+docker compose up -d
+```
+
+If it fails the same way a second time, fully recreate:
+
+```bash
+docker compose down
+docker compose up -d
+```
+
+See MASTER.md §27 for the failure-mode class.
+
+**Edited a bind-mounted config but `restart` didn't apply it:**
+
+Docker Desktop on Windows + WSL2 caches bind-mount source paths
+in the container's mount manifest. `docker compose restart` reuses
+the stale manifest. Recover by recreating the container:
+
+```bash
+docker compose up -d --force-recreate <service>
+```
+
+Equivalent: `docker compose down <service>` then `docker compose
+up -d <service>`. See MASTER.md §27.
+
+### Grafana
+
+**Grafana health check returns 404 on the name-based endpoint:**
+
+Grafana v13 deprecated `/api/datasources/name/{name}/health` — it
+now returns 404 with `{"message":"Not found"}`. Use the UID-based
+endpoint instead:
+
+```bash
+# 1. List datasources to find the UID
+curl -u "$GRAFANA_ADMIN_USER:$GRAFANA_ADMIN_PASSWORD" \
+  http://localhost:3000/api/datasources
+
+# 2. Health check by UID (substitute the uid value from step 1)
+curl -u "$GRAFANA_ADMIN_USER:$GRAFANA_ADMIN_PASSWORD" \
+  "http://localhost:3000/api/datasources/uid/<uid>/health"
+```
+
+A healthy InfluxDB datasource returns `{"status":"OK","message":
+"datasource is working. N buckets found"}`. See MASTER.md §28.
 
 ---
 
