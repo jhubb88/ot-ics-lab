@@ -66,7 +66,7 @@ boundary") covers this; the practical implication for Phase 2 work
 ## Commands
 
 ```bash
-docker exec -d otlab-openplc sh -c \
+docker exec -d otlab-openplc-v4 sh -c \
   "tcpdump -i any -U -w /tmp/scenario-1.pcap 'tcp or icmp'"
 
 # 1a. Host discovery
@@ -75,14 +75,14 @@ docker exec otlab-attacker nmap -sn 172.18.0.0/24
 # 1b. TCP connect scan
 docker exec otlab-attacker nmap -sT -Pn \
   -p 22,80,443,502,1881,8080,8443,9001 \
-  172.18.0.2 172.18.0.3
+  172.18.0.5 172.18.0.3
 
 # 1c. Service version detection
 docker exec otlab-attacker nmap -sV -p 502,1881,8080 \
-  172.18.0.2 172.18.0.3
+  172.18.0.5 172.18.0.3
 
-docker exec otlab-openplc pkill tcpdump
-docker cp otlab-openplc:/tmp/scenario-1.pcap \
+docker exec otlab-openplc-v4 pkill tcpdump
+docker cp otlab-openplc-v4:/tmp/scenario-1.pcap \
   ./captures/phase2-scenario-1-recon-2026-05-22.pcap
 ```
 

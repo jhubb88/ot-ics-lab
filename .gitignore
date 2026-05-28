@@ -50,3 +50,9 @@ docs/cheatsheets/
 # .env carries the InfluxDB admin token and Grafana admin password — never
 # commit. Use .env.example as the public template; .env stays local.
 .env
+
+# --- Personal attack runbook ----------------------------------------------
+# Local-only runbook for live demo of the Phase 2 attack scenarios. Records
+# the working v4-substituted commands + actual SID outcomes. Personal,
+# never committed.
+_ATTACK-RUNBOOK.md
