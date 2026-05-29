@@ -1,9 +1,9 @@
-# Phase 2 Scenario 2 — Modbus function-code scan against `openplc:502`
+# Phase 2 Scenario 2 — Modbus function-code scan against `openplc_v4:502`
 
 **Date:** 2026-05-22
 **Source task:** Phase 2 attack scenarios (step 2 of Phase 2)
 **Attacker vantage:** `otlab-attacker` multi-homed on `ot_zone`
-(`172.18.0.4`), target `openplc:502` (`172.18.0.2`).
+(`172.18.0.4`), target `openplc_v4:502` (`172.18.0.5`).
 
 ---
 
@@ -11,7 +11,7 @@
 
 Same boundary-crossed state as scenario 1: attacker on `ot_zone` via
 `docker network connect otlab_ot_zone otlab-attacker`. Capture vantage
-is `tcpdump -i any` inside `otlab-openplc`.
+is `tcpdump -i any` inside `otlab-openplc-v4`.
 
 Runtime fixes applied during this scenario (documented here for the
 audit trail):
@@ -53,13 +53,13 @@ audit trail):
 ## Commands
 
 ```bash
-docker exec -d otlab-openplc sh -c \
+docker exec -d otlab-openplc-v4 sh -c \
   "tcpdump -i any -U -w /tmp/scenario-2.pcap 'tcp port 502'"
 sleep 2
 
 docker exec -i otlab-attacker python3 - <<'PY'
 from pymodbus.client import ModbusTcpClient
-c = ModbusTcpClient(host='openplc', port=502)
+c = ModbusTcpClient(host='openplc_v4', port=502)
 c.connect()
 # 8 standard FCs + 3 out-of-map reads — see Observed Output below
 c.read_coils(0, 6,            slave=1)   # FC 1
@@ -77,8 +77,8 @@ c.close()
 PY
 
 sleep 3
-docker exec otlab-openplc pkill tcpdump
-docker cp otlab-openplc:/tmp/scenario-2.pcap \
+docker exec otlab-openplc-v4 pkill tcpdump
+docker cp otlab-openplc-v4:/tmp/scenario-2.pcap \
   ./captures/phase2-scenario-2-fc-scan-2026-05-22.pcap
 ```
 
