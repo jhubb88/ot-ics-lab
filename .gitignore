@@ -58,3 +58,6 @@ docs/cheatsheets/
 # from it for reading.
 _ATTACK-RUNBOOK.md
 _ATTACK-RUNBOOK.pdf
+
+# Telegraf stop->up reproduction hunt — capture-only forensic log. Never commit.
+_TELEGRAF-HUNT.md

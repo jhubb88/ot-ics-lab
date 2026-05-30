@@ -315,6 +315,14 @@ services:
       INFLUXDB_INIT_ORG: ${INFLUXDB_INIT_ORG}
       INFLUXDB_INIT_BUCKET: ${INFLUXDB_INIT_BUCKET}
       INFLUXDB_INIT_ADMIN_TOKEN: ${INFLUXDB_INIT_ADMIN_TOKEN}
+      # 12-hour (AM/PM) clock instead of Grafana's default 24-hour display.
+      # Maps to grafana.ini [date_formats]; Moment.js tokens (h/hh + a = 12h).
+      # interval_* drive graph x-axis tick labels; full_date is the time-range
+      # picker + tooltips. Server-wide setting (not per-dashboard/per-user).
+      GF_DATE_FORMATS_FULL_DATE: "YYYY-MM-DD h:mm:ss a"
+      GF_DATE_FORMATS_INTERVAL_SECOND: "h:mm:ss a"
+      GF_DATE_FORMATS_INTERVAL_MINUTE: "h:mm a"
+      GF_DATE_FORMATS_INTERVAL_HOUR: "MM/DD h:mm a"
     networks:
       mgmt_zone:
         ipv4_address: 172.19.0.10
