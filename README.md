@@ -1,352 +1,169 @@
-# OT/ICS Lab — Tank-Fill Process
+# OT/ICS Security Lab — Tank-Fill Process
 
-A self-contained, vendor-neutral Operational Technology (OT) / Industrial
-Control Systems (ICS) lab. It runs a realistic **PLC + HMI** control loop
-for a generic plant tank-fill process, entirely in Docker, with deliberate,
-defensible architecture and security decisions baked in.
+A self-contained, vendor-neutral **Operational Technology (OT) / Industrial Control
+Systems (ICS) security lab**, built entirely in Docker. It runs a realistic
+**PLC + HMI** control loop for a simulated plant tank-fill process, on a
+**segmented three-zone network**, with **passive IDS detection** and a **time-series
+historian** wired in.
 
-This is a **portfolio / interview artifact**. The *reasoning* behind the
-build choices is part of the project — see **Security Talking Points** below.
+The lab demonstrates a full defensive OT stack end to end — process control,
+operator visualization, network segmentation, intrusion detection, and historian/
+dashboards — and uses it as a platform to run and document realistic Modbus/TCP
+attack scenarios against a PLC. Every version is pinned and every architectural
+choice is recorded as an ADR or a numbered finding.
 
-> **Scope:** Phase 1 of 3. Phase 1 = 2 services (PLC + HMI), 3 network zones,
-> capturable Modbus/TCP traffic, supply-chain control, segmentation
-> rationale — the architecture and monitoring foundation. **Phase 2 extends
-> this into operational security** (attacker container in `attacker_zone`,
-> Suricata detection firing on the Modbus indicators, written attack
-> scenarios). **Phase 3 is platform migration and zone hardening** (OpenPLC
-> v3 → v4, harden the `mgmt_zone` ↔ `ot_zone` boundary). Phases 2 and 3 are
-> documented backlog only — see `docs/MASTER.md`.
-
-![FUXA HMI rendering the simulated plant tank with pump, valve, and alarm indicators during a normal fill/drain cycle](docs/img/fuxa-hmi.png)
+> **Scope:** a personal learning / portfolio lab (Docker Desktop + WSL2). Not a
+> production system and not original security research — it applies well-understood
+> ICS-security concepts to a working, reproducible stack.
 
 ---
 
-## What it is
+## Architecture
 
-A simulated plant tank with **level**, an **inlet valve**, a **fill pump**,
-and a **high-level alarm**:
+Seven containers across three isolated Docker networks. All images are version-pinned.
 
-- **OpenPLC v3** runs the control logic (`plc/tank_fill.st`, IEC 61131-3
-  Structured Text) and serves **Modbus/TCP** on port 502.
-- **FUXA** is the operator HMI — it reads Modbus from the PLC and animates
-  the tank, pump, valve, and alarm.
-- The PLC program **simulates its own process** (there is no hardware in this
-  lab, by design — see Security Talking Points). The tank fills when the pump
-  + valve are active and continuously drains, so it cycles forever:
-  fill → stop at high setpoint → drain → restart at low setpoint.
-
-```
-        ┌────────────┐   Modbus/TCP :502    ┌────────────┐
-        │   FUXA HMI │  ───────────────────▶ │ OpenPLC v3 │
-        │  (operator)│  ◀─────────────────── │   (PLC)    │
-        └────────────┘   level / pump /      └────────────┘
-                          valve / alarm
-```
-
-**Control behavior** (hysteresis — real-plant practice, no pump short-cycling):
-
-| Condition | Action |
-|---|---|
-| Level ≤ 20 % | Start pump + open inlet valve (begin filling) |
-| Level ≥ 80 % | Stop pump + close valve (begin draining) |
-| Level ≥ 90 % | High-high alarm ON |
-
-![FUXA HMI at level 90% with the high-high alarm coil active — the alarm indicator switches from NORMAL to ACTIVE in the live HMI](docs/img/fuxa-alarm.png)
-
----
-
-## Modbus map (PLC → HMI)
-
-OpenPLC v3 fixed addressing. FUXA connects as a Modbus client and reads:
-
-| Tag | ST address | Modbus object | Address |
-|---|---|---|---|
-| Tank level (0–100 %) | `%QW0` | Holding Register | 0 |
-| Low setpoint (display) | `%QW1` | Holding Register | 1 |
-| High setpoint (display) | `%QW2` | Holding Register | 2 |
-| Pump running | `%QX0.0` | Coil | 0 |
-| Valve open | `%QX0.1` | Coil | 1 |
-| High-high alarm | `%QX0.2` | Coil | 2 |
-
----
-
-## Prerequisites
-
-| Requirement | Notes |
-|---|---|
-| Windows + **Docker Desktop** | **WSL2 integration enabled for this distro** — MANUAL one-time setup |
-| WSL2 distro | Clone this repo to any path on your WSL2 filesystem — referenced as `<repo-root>` throughout these docs |
-| **Wireshark** (on Windows) | For the Modbus capture exercise — `docs/monitoring.md` |
-| ~2 GB disk + a few minutes | First run **builds OpenPLC from source** (see below) |
-
-> **WSL2 networking rule (memorize this — it causes most first-run pain):**
-> - From the **Windows browser**: always use `http://localhost:<port>`.
-> - **Container → container**: always use the **service name**, never
->   `localhost`. `localhost` inside a container is *that container*.
-
----
-
-## Setup & Run
-
-From the repo root, in the WSL2 shell:
-
-```bash
-docker compose up --build
-```
-
-**First run builds OpenPLC v3 from a pinned upstream commit** (no Docker Hub
-image — see Security Talking Points). This takes a few minutes and is
-expected. Subsequent runs reuse the built image and start in seconds.
-
-Once both containers are up:
-
-| Service | URL (Windows browser) | Default login |
+| Component | Role | Image (pinned) |
 |---|---|---|
-| OpenPLC web editor | `http://localhost:8080` | `openplc` / `openplc` |
-| FUXA HMI | `http://localhost:1881` | set on first launch |
+| **OpenPLC Runtime v4** | PLC — runs IEC 61131-3 control logic, serves Modbus/TCP | `ghcr.io/autonomy-logic/openplc-runtime:v4.0.9` |
+| **FUXA** | HMI — the operator screen (tank, pump, valve, alarm) | `frangoteam/fuxa:1.3.1` |
+| **Suricata** | Passive IDS sensor (alert-only) | `jasonish/suricata:8.0.5` |
+| **Telegraf** | Collector — polls the PLC over Modbus, writes to InfluxDB | `telegraf:1.38.4-alpine` |
+| **InfluxDB** | Historian — time-series store for PLC metrics | `influxdb:2.9.1` |
+| **Grafana** | Dashboards over the historian | `grafana/grafana:13.0.1-security-01` |
+| **Attacker** | Recon / Modbus toolbox; models an internal foothold | built from `./attacker` (pinned Debian) |
 
-### Load the control program into the PLC  *(MANUAL — web UI)*
+### Network zones
 
-1. Open `http://localhost:8080`, log in (`openplc` / `openplc`).
-2. **Programs → Choose File →** select `plc/tank_fill.st` **→ Upload**.
-3. Give it a name, **Upload program**. OpenPLC compiles it (MATIEC).
-   - If compilation errors appear: Structured Text is niche and the
-     compiler is strict — a small fix pass on first upload is **expected**,
-     not a blocker (see Troubleshooting → *ST compile errors*).
-4. **Dashboard → Start PLC**. The runtime now serves Modbus/TCP on 502.
-5. **Settings → enable "Auto-start PLC at OpenPLC startup"**. One-time setup
-   per fresh clone — the setting lives in `openplc.db` and persists via the
-   `otlab_openplc_state` named volume, so subsequent
-   `docker compose down`/`up` cycles resume the PLC automatically.
+```
+┌─ mgmt_zone  172.19.0.0/16 — engineering / browser access ──────────────┐
+│   Grafana :3000     InfluxDB :8086     FUXA HMI :1881                   │
+└────────────────────────────────┬───────────────────────────────────────┘
+        (FUXA, Telegraf, Suricata are multi-homed across both zones)
+┌─ ot_zone   172.18.0.0/16 — plant floor / Modbus/TCP ───────────────────┐
+│   FUXA ──Modbus :502──▶ OpenPLC v4 (PLC) ◀──Modbus── Telegraf           │
+│   Suricata  — passive IDS, sees the process network                     │
+└───────────────────────────────────────────────────────▲────────────────┘
+                                                         ┊ scenarios attach
+                                                         ┊ the attacker here
+┌─ attacker_zone  172.20.0.0/16 — the attacker's starting point ─────────┐
+│   Attacker toolbox                                                      │
+│     default:    isolated  ✕──  no route to ot_zone  (segmentation proof)│
+│     scenarios:  docker network connect  ┄┄▶ ot_zone (internal foothold) │
+└─────────────────────────────────────────────────────────────────────────┘
 
-![OpenPLC dashboard showing the PLC running with tank_fill.st loaded; runtime log shows the Modbus client connection accepted on :502](docs/img/openplc-running.png)
+Historian data path:  OpenPLC ──Modbus──▶ Telegraf ──▶ InfluxDB ──▶ Grafana
+```
 
-### Wire up the FUXA HMI  *(MANUAL — web UI)*
+The attacker container is **isolated by default** — placed only on `attacker_zone`, it
+has no route to the PLC, which is the lab's baseline segmentation proof. Each attack
+scenario then **deliberately** attaches it to `ot_zone` (`docker network connect`, step 2
+of every scenario) to model an adversary who has *already* gained an internal foothold —
+the realistic ICS threat. Both states are the point: the default shows the boundary
+holds; the scenarios show what an attacker can do once inside.
 
-1. Open `http://localhost:1881`, complete first-launch admin setup.
-2. **Connections → add a Modbus TCP device:**
-   - **Host:** `openplc`  ← the service name, **NOT** `localhost`/`127.0.0.1`
-   - **Port:** `502`
-3. Add tags from the Modbus map above (Holding Register 0 = level; Coils
-   0/1/2 = pump/valve/alarm).
-4. Build a simple screen: a tank fill bar bound to level, lamps for
-   pump/valve/alarm. The HMI now animates as the tank cycles.
+(Honest scope note: for usability the two legitimate services are multi-homed on both
+production zones, so the `mgmt_zone ↔ ot_zone` split is soft today; hardening it into a
+strict boundary is tracked backlog. Full rationale in `docs/network-security.md`.)
+
+The PLC program (`plc/tank_fill.st`, IEC 61131-3 Structured Text) **simulates its own
+plant** — there is no hardware. The tank fills when the pump and valve are active and
+drains continuously, cycling on hysteresis (fill → stop at the high setpoint → drain →
+restart at the low setpoint), with a high-high level alarm.
 
 ---
 
-## Test / verify it works
+## Run it
 
-You have a working lab when **all** of these are true:
-
-- [ ] `docker compose up --build` brings up `otlab-openplc` + `otlab-fuxa`.
-- [ ] `tank_fill.st` compiles and the PLC is **Running** in OpenPLC.
-- [ ] FUXA's Modbus device shows **connected** to `openplc:502`.
-- [ ] The HMI tank level **rises to ~80 %, stops, drains to ~20 %, repeats**.
-- [ ] Pump/valve lamps follow the fill cycle; alarm trips above 90 %.
-- [ ] Modbus/TCP packets are capturable in Wireshark (`docs/monitoring.md`).
-
-Quick host-side Modbus reachability check (optional):
+Prerequisites: Docker Desktop with WSL2 integration. An `.env` supplying the InfluxDB
+and Grafana init credentials is required (consumed by `docker-compose.yml`; `.env` is
+gitignored).
 
 ```bash
-# Port 502 is published to the host so Wireshark / a Modbus client on
-# Windows can reach it. Container-to-container Modbus does NOT use this.
-docker compose ps
-ss -tlnp | grep ':502' || echo "502 not listening yet — start the PLC"
+docker compose up -d          # brings up all 7 containers
+docker compose ps             # FUXA shows (healthy) once its Modbus poll is established
+```
+
+From the Windows browser: **FUXA HMI** `http://localhost:1881` · **Grafana**
+`http://localhost:3000` · **InfluxDB** `http://localhost:8086`. (OpenPLC v4 exposes a
+JWT-auth REST API on `:8443`, not a web UI — it is driven by the OpenPLC Editor v4
+desktop app.) Day-to-day operation is documented in `docs/runbooks/lab-operations.md`.
+
+---
+
+## What's built
+
+- **PLC simulation** — OpenPLC v4 running a tank-fill control loop over Modbus/TCP,
+  with the process model simulated in the PLC program itself.
+- **HMI** — FUXA operator screen bound to the PLC's live tank level, pump, valve, and
+  alarm.
+- **Network segmentation** — three pinned-subnet Docker zones with an isolated
+  `attacker_zone` as the enforced default boundary.
+- **Intrusion detection** — Suricata with a **13-rule Modbus/recon ruleset** (SIDs
+  `9000001–9000021`): 5 recon rules (host-discovery / port-scan / SYN-to-PLC), 6
+  Modbus protocol rules (writes from non-HMI sources, out-of-map reads, unused function
+  codes), and 2 non-HMI Modbus-read rules. Alert-only IDS; detection is verified by
+  **offline pcap replay** through Suricata.
+- **Historian + dashboards** — Telegraf → InfluxDB → Grafana, collecting PLC registers
+  (tank level, setpoints, coil states) on a 3-second cadence.
+- **Documented attack scenarios** — five Modbus/TCP scenarios (recon → function-code
+  scan → coil write → register write → replay), each captured to a pcap and replayed
+  through the IDS, in `docs/phase2/scenarios/`.
+
+---
+
+## Findings highlight
+
+The lab produces real, reproducible results — not just infrastructure. The strongest
+example: live-fire testing showed that **OpenPLC v4 reasserts program-driven outputs on
+every scan cycle** — the coils and registers the PLC program rewrites each scan (the
+alarm coil, the setpoint mirrors) — so an external Modbus write to one of *those*
+outputs is *detected on the wire but never persists*: the runtime overwrites it within
+~100 ms (read-back stuck 0/40 in testing). This is a genuine v3→v4 behavioral difference
+(v3 let such writes linger between scans) and is written up as findings **§30 / §31** in
+`docs/MASTER.md`. It is a scoped result — it does not mean v4 blocks all writes; targets
+the program does *not* reassert remain the open case. The same document records the
+offline-replay detection methodology and the full Suricata SID baseline, and the
+architectural decisions are captured as ADRs in `docs/decisions/` (the v3→v4 migration
+and the historian-stack selection).
+
+---
+
+## Repository layout
+
+```
+docker-compose.yml        7 services, 3 networks, pinned images + IPs
+plc/                      OpenPLC control logic (tank_fill.st) + v4 plugin config
+fuxa/                     HMI project data (persisted)
+suricata/                 suricata.yaml + rules/local.rules (13 SIDs) + logs
+telegraf/                 Modbus-input → InfluxDB-output collector config
+grafana/                  datasource + dashboard provisioning
+captures/                 pcaps (gitignored)
+docs/
+  MASTER.md               status, locked decisions, numbered findings
+  architecture.md         components, process/control model, zones
+  network-security.md     threat model, segmentation, attacker view
+  monitoring.md           Modbus capture + baseline-vs-suspicious traffic
+  decisions/              ADRs (0001 v3→v4 stack, 0002 historian stack)
+  phase2/                 detection write-ups + attack scenarios
+  runbooks/               lab-operations.md (daily operation)
 ```
 
 ---
 
-## Screenshots
+## Status & scope
 
-Portfolio screenshot index. Captured files live in `docs/img/`; pending
-rows are MANUAL follow-ups for a later live-run session (per the
-authoring-discipline rule in `docs/MASTER.md`).
+A personal learning / portfolio project, run on Docker Desktop + WSL2.
 
-| File | Shows | Status |
-|---|---|---|
-| `docs/img/openplc-running.png` | OpenPLC dashboard, PLC **Running**, program loaded | Captured 2026-05-20 |
-| `docs/img/fuxa-hmi.png` | FUXA screen mid-cycle (tank ~half, pump ON) | Captured 2026-05-19 |
-| `docs/img/fuxa-alarm.png` | FUXA with high-high alarm active | Captured 2026-05-20 |
-| `docs/img/wireshark-modbus.png` | Wireshark filtered on `modbus` (`docs/monitoring.md`) | Captured 2026-05-20 |
+**Built and working:** PLC + HMI control loop; three-zone segmentation with an isolated
+attacker; Suricata IDS (13 rules) with offline-replay verification; the five documented
+attack scenarios; the Telegraf/InfluxDB/Grafana historian; the OpenPLC v3→v4 migration.
 
-*(Pending captures require a live run on your machine and can't be
-auto-generated.)*
-
----
-
-## Security Talking Points  *(the "why" — this is the interview story)*
-
-### 1. Supply-chain control — OpenPLC built from pinned source
-
-There is no official OpenPLC image on Docker Hub; every prebuilt one is
-community-maintained with unverified provenance. For a *security* lab,
-pulling an unvetted PLC image would contradict the whole point. So the PLC
-is built from the official upstream repo, pinned to one immutable commit
-(`plc/Dockerfile`): inspectable before it runs, reproducible, no trust in an
-anonymous publisher.
-
-### 2. Least privilege — no `--privileged`
-
-Upstream's sample run command uses `--privileged` for GPIO/hardware I/O.
-This lab has no hardware, so privileged mode is **deliberately not set**.
-The PLC program simulates the process internally instead. Smaller blast
-radius, demonstrated on purpose.
-
-### 3. Reproducibility — every image pinned
-
-`frangoteam/fuxa:1.3.1` and a pinned Debian base, never `:latest`. The lab
-that runs today is the lab that runs in six months.
-
-### 4. Network segmentation — `attacker_zone` is the real boundary
-
-Three Docker networks: `ot_zone` (process/Modbus), `mgmt_zone` (human web
-access), `attacker_zone` (defined, **intentionally empty** in Phase 1).
-Docker bridge networks are isolated by default, so a container placed only
-in `attacker_zone` has no route to `ot_zone` — that is the enforcement
-boundary Phase 2's attacker container will probe. Honest scope note: in
-Phase 1 the two legitimate services are multi-homed on `ot_zone` +
-`mgmt_zone` for usability; the genuinely demonstrable boundary is
-`attacker_zone`. Full rationale in `docs/network-security.md`.
-
-### 5. Defense-relevant visibility — Modbus has no authentication
-
-Modbus/TCP is plaintext and unauthenticated by design. Capturing it in
-Wireshark (`docs/monitoring.md`) shows exactly what an on-path attacker in
-the OT network would see and could forge — the core OT security lesson.
-
-![Wireshark filtered on modbus showing FUXA→OpenPLC steady FC 3 / FC 1 read polling — plaintext, no credentials, no integrity check](docs/img/wireshark-modbus.png)
-
----
-
-## Troubleshooting
-
-### OpenPLC build is slow / fails on first `up`
-
-Expected: the first run compiles OpenPLC from source (pinned commit). Give
-it a few minutes. If the build fails on the `git clone`/`checkout` step,
-it's almost always network/DNS for the HTTPS clone — re-run
-`docker compose up --build`. The build fails *loudly* on a bad commit
-checkout by design; it never silently falls back to a branch tip.
-
-### Runtime misbehaves without `--privileged`
-
-Not expected in this lab (no hardware I/O). If the OpenPLC runtime genuinely
-won't start the program, that points to an ST/compile issue, not privilege —
-see below. Adding `--privileged` is **not** the fix here and would undo a
-deliberate security decision; investigate the program first.
-
-### ST compile errors in the OpenPLC editor
-
-Structured Text + the MATIEC compiler are strict. Common first-upload fixes:
-integer literal typing, the `AT %QWn` direct-mapping syntax, or `TASK`
-interval format. Adjust `plc/tank_fill.st`, re-upload, re-compile. This is a
-known, tracked risk (`docs/MASTER.md`), not a project blocker.
-
-### FUXA can't reach the PLC ("connection refused" / no data)
-
-The #1 first-time failure. In the FUXA Modbus device the host **must** be
-`openplc` (the service name) on port `502` — **not** `localhost` or
-`127.0.0.1`. Containers reach each other by service name on the shared
-`ot_zone` network; `localhost` inside FUXA is FUXA itself. Also confirm the
-PLC shows **Running** in OpenPLC (a stopped PLC serves no Modbus).
-
-### FUXA screen is gone after `docker compose down`/recreate
-
-The HMI project persists to `./fuxa/appdata` via a bind mount. If it
-vanished, that volume line in `docker-compose.yml` isn't taking effect —
-verify the path and that you ran from the repo root.
-
-### OpenPLC state is gone after a Dockerfile rebuild
-
-OpenPLC state (uploaded programs, login, "Auto-start PLC" setting) lives in
-a named volume `otlab_openplc_state`. Routine `docker compose down` followed
-by `up` preserves this volume. **If you change `OPENPLC_COMMIT` in
-`plc/Dockerfile`** (or otherwise need to refresh the image's webserver code),
-the named volume still holds the *old* commit's code and state. Run
-`docker compose down -v` before the next `docker compose up --build` so the
-new image seeds a fresh volume. One-time cost when bumping the pinned
-commit, not routine.
-
-### Disaster recovery — OpenPLC web UI dead after a restart, runtime not starting
-
-**Symptom.** After a Docker Desktop restart or a `docker compose down`/`up`
-cycle, the OpenPLC web UI at `http://localhost:8080` is unreachable
-(connection refused, or the page never loads), and the PLC runtime isn't
-serving Modbus on `:502` either. FUXA can't connect.
-
-**Cause.** Out-of-sync internal state: the named volume preserved
-`openplc.db`, but the `Programs` table row for the active program is
-missing while OpenPLC's `active_program` pointer file still references it.
-At startup, the webserver queries the Programs table, gets no row, and
-crashes with `TypeError: 'NoneType' object is not subscriptable`. The
-runtime can't start because no program is loadable.
-
-**Diagnose.** Confirm the crash signature in the container logs:
-
-```bash
-docker logs otlab-openplc 2>&1 | grep -A3 "NoneType"
-```
-
-If you see `TypeError: 'NoneType' object is not subscriptable` at
-`webserver.py:2726`, this is the failure.
-
-**Recover.** Restore the missing Programs row from inside the container:
-
-```bash
-# 1. Find the filename the pointer references
-docker exec otlab-openplc cat /opt/OpenPLC_v3/webserver/active_program
-#    Output is something like: 927367.st
-
-# 2. Insert the matching Programs row (substitute YOUR filename from step 1)
-docker exec otlab-openplc sqlite3 /opt/OpenPLC_v3/webserver/openplc.db \
-  "INSERT INTO Programs (Name, Description, File, Date_upload) VALUES \
-   ('Tank Fill', 'Generic plant tank-fill process', '<filename>', strftime('%s','now'));"
-
-# 3. Restart so OpenPLC re-reads state
-docker compose restart openplc
-```
-
-**Verify.** `curl -I http://localhost:8080` should return `HTTP/1.1 302
-Found` (redirect to login). FUXA reconnects automatically once the PLC
-runtime is up. Full `docker compose down`/`up -d` cycle should now succeed
-cleanly — the recovery is persistent because the inserted row lives in the
-named volume.
-
-Tracked in `docs/MASTER.md` Known Risks; this is an OpenPLC v3 brittleness
-(no transactional linkage between the pointer file and the DB row), not a
-lab bug.
-
----
-
-## Project layout
-
-```
-ot-ics-lab/
-├── docker-compose.yml      2 services, 3 networks
-├── plc/
-│   ├── Dockerfile          OpenPLC v3, pinned upstream source
-│   └── tank_fill.st        control logic + process model (ST)
-├── fuxa/appdata/           FUXA HMI persistence (bind mount)
-├── captures/               Wireshark .pcap output (gitignored)
-└── docs/
-    ├── MASTER.md           status & index (source of truth)
-    ├── architecture.md     components, data flow, zones
-    ├── network-security.md segmentation rationale
-    └── monitoring.md       Wireshark Modbus capture guide
-```
-
----
-
-## Status
-
-Phase 1 build progress is tracked in **`docs/MASTER.md`** (single source of
-truth). Phase 2 and Phase 3 backlogs are listed there too.
-
-**Queue Item 1 (2026-05-27):** Historian + visualization stack added —
-InfluxDB v2 + Telegraf + Grafana. ADR: `docs/decisions/0002-historian-stack.md`.
+**Backlog (see `docs/MASTER.md`):** hardening the soft `mgmt_zone ↔ ot_zone` boundary
+into a strict one, and live IDS capture (currently offline-replay only — Docker Desktop
+host networking is layer-4-only, so live AF_PACKET capture needs Docker Engine on Linux).
 
 ---
 
 ## License
 
-MIT — see [`LICENSE`](LICENSE).
+MIT — see `LICENSE`.
