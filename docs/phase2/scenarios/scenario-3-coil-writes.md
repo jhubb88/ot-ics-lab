@@ -3,7 +3,7 @@
 **Date:** 2026-05-22
 **Source task:** Phase 2 attack scenarios (step 2 of Phase 2)
 **Attacker vantage:** `otlab-attacker` multi-homed on `ot_zone`
-(`172.18.0.4`), target `openplc:502` (`172.18.0.2`).
+(`172.18.0.4`), target `openplc_v4:502` (`172.18.0.5`).
 **Modbus map (re §4 of `docs/network-security.md`):** Coil 2 =
 `%QX0.2` = `High_Alarm` (display-only output of the PLC, FUXA reads
 it for the Alarm indicator).
@@ -15,7 +15,7 @@ it for the Alarm indicator).
 Same boundary-crossed state as scenarios 1 and 2; FUXA running and
 its HMI screen open in the Windows browser before the burst starts.
 
-Capture vantage: `tcpdump -i any` inside `otlab-openplc`. Filter
+Capture vantage: `tcpdump -i any` inside `otlab-openplc-v4`. Filter
 `'tcp port 502'`. `procps` confirmed installed (scenario 2 hand-off)
 so `pkill tcpdump` works cleanly.
 
@@ -58,14 +58,14 @@ operational-deception question.
 ## Commands
 
 ```bash
-docker exec -d otlab-openplc sh -c \
+docker exec -d otlab-openplc-v4 sh -c \
   "tcpdump -i any -U -w /tmp/scenario-3.pcap 'tcp port 502'"
 sleep 2
 
 docker exec -i otlab-attacker python3 - <<'PY'
 from pymodbus.client import ModbusTcpClient
 import time, sys
-c = ModbusTcpClient(host='openplc', port=502)
+c = ModbusTcpClient(host='openplc_v4', port=502)
 c.connect()
 
 lvl = c.read_holding_registers(0, 1, slave=1).registers[0]
@@ -98,8 +98,8 @@ c.close()
 PY
 
 sleep 3
-docker exec otlab-openplc pkill tcpdump
-docker cp otlab-openplc:/tmp/scenario-3.pcap \
+docker exec otlab-openplc-v4 pkill tcpdump
+docker cp otlab-openplc-v4:/tmp/scenario-3.pcap \
   ./captures/phase2-scenario-3-coil-writes-2026-05-22.pcap
 ```
 
@@ -148,7 +148,7 @@ high-high alarm during a routine fill cycle.
 
 - `captures/phase2-scenario-3-coil-writes-2026-05-22.pcap`
 - 27 KB, 279 packets, single TCP connection
-  (`172.18.0.4:* → 172.18.0.2:502`)
+  (`172.18.0.4:* → 172.18.0.5:502`)
 - 60 FC 5 (write single coil) requests + 60 acks = 120 burst
   packets, plus baseline FUXA polling on mgmt_zone interleaved
 - TCP handshake + FIN + ACKs = remainder
