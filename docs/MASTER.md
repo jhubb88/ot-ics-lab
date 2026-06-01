@@ -1257,6 +1257,76 @@ falsified value would actually persist on the HMI; against a reasserted
 output it will not. Tracked as a pointer for the next attack-execution
 scenarios.
 
+### 31. v4 scan-reassertion generalizes to holding-register setpoint writes — §30 extended to FC 6/FC 16 (2026-06-01)
+
+**Source:** Scenario 4 re-run, live-fired against the v4 stack on
+2026-06-01 — FC 6 writes to HR 1 (`SP_Low_Out`, `%QW1`) and HR 2
+(`SP_High_Out`, `%QW2`), plus a bonus FC 16 multi-register write to both.
+Procedure + full evidence in `_ATTACK-RUNBOOK.md` (gitignored, local-only);
+canonical capture `captures/phase2-scenario-4-runbook-2026-06-01.pcap`,
+Suricata replay output `suricata/logs/runbook-scenario-4-2026-06-01/` (both
+gitignored). Extends Finding §30 from coil outputs to holding-register
+outputs.
+
+**Summary:** Same clean split as §30 — **fully detected, no observable
+effect** — now confirmed for a different target class (setpoint holding
+registers) and two different write function codes (FC 6, FC 16).
+
+- **Detection layer:** offline Suricata replay with `-k none` fired
+  **9000013 ×119** (write to holding register from non-FUXA) plus
+  **9000003 ×1** (the initial SYN). The 119 is exact 1:1 with what the
+  attacker actually sent — **118 FC 6 writes** (the burst loop completed 59
+  iterations this run; `pymodbus` printed `sent 118`) **+ 1 FC 16** = 119
+  write PDUs, 119 alerts, **zero missed**. §23 lists 121 for this scenario;
+  that came from a 60-iteration run (120 FC 6 + 1 FC 16). The count tracks
+  the burst loop's iteration count, which drifts a write or two between
+  runs — benign loop-timing, not a detection regression. The same run also
+  fired **9000021 ×8** from the script's 8 register snapshots (FC 3 reads
+  from a non-FUXA source); those reads are not in §23's pure-burst pcap.
+
+- **Process layer:** the setpoint writes never persist. Evidence:
+  1. Write-then-immediate-read on the same connection, 40× per register →
+     **0/40 stuck for HR 1, 0/40 for HR 2**.
+  2. Every canonical AFTER snapshot — including the +0 ms read taken the
+     instant the burst ended — showed the real values (HR 1 = 20,
+     HR 2 = 80), never the attacker's 70/10.
+  3. The FC 16 multi-write (99, 11) was reasserted to 20/80 by the +0 ms
+     read.
+  4. InfluxDB `setpoint_low_pct` = 20 and `setpoint_high_pct` = 80 across
+     **all 21 samples** spanning the burst window (including the 16:06:36
+     and 16:06:39 samples that bracket it) — the falsified values never
+     reached the historian.
+  5. The tank's control loop ran undisturbed throughout (level cycled
+     61 → 69 → … → 34 on its normal schedule) — the real `SP_Low`/`SP_High`
+     the logic uses live in non-Modbus-mapped PLC memory; HR 1/HR 2 are
+     display mirrors the program rewrites every scan.
+
+**Significance:** §30 established the reassert-before-observable property
+for an FC 5 write to a coil output (the alarm). §31 shows the **identical
+0/40 outcome** for FC 6 and FC 16 writes to holding-register *setpoint*
+outputs — a different target class and different function codes, same
+result. This generalizes the property from "the alarm coil" to
+**program-driven outputs as a v4 runtime characteristic**, not a
+per-target quirk: on v4, an external write to any object the program
+rewrites each scan is detected on the wire but has no lasting or observable
+effect. The v3 contrast holds here too — the v3 scenario-4 doc recorded the
++0 ms read catching 70/10 falsified before the next scan; on v4 it is
+caught 0/40.
+
+**Scope / honesty:** confirmed for **program-driven outputs** — values the
+`.st` program writes on every scan (coils 0–2, holding registers 1–2). It
+does **not** imply v4 protects all targets. §30's forward-pointer stands:
+the untested — and therefore still-open — cases are targets the program
+does **not** reassert each scan: physical/logical **inputs**, **free or
+unused registers** the logic only reads, or an attack that **stops the
+program** (RUN→STOP) so reassertion ceases. Those remain the next thing to
+probe; nothing in §30 or §31 claims they are masked.
+
+**Cross-references:** §30 (the FC 5 coil finding this generalizes); §5 +
+`docs/network-security.md` §5.3 (the reassertion-every-scan property); §6
+(the v3 "operational deception confirmed" contrast); §23 (the Suricata SID
+detection baseline this matches on 9000003 + 9000013).
+
 ---
 
 ## Phase 2 Backlog (security operations on the Phase 1 stack — documented; not built)
