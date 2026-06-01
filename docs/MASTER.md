@@ -933,7 +933,7 @@ Per-scenario results (live attacks captured from attacker, offline-replayed thro
 - **Scenario 2 (Modbus FC scan):** 9000003 ×1, 9000010 ×1, 9000011 ×1, 9000012 ×2, 9000013 ×2, 9000014 ×2, 9000015 ×2, 9000020 ×2, 9000021 ×3. All 9 Modbus rules fire correctly on v4 IPs.
 - **Scenario 3 (alarm coil burst, 60 writes):** 9000003 ×1, **9000012 ×60**. **Exact match to Phase 2 count.**
 - **Scenario 4 (HR writes, 60 + 60 + 1):** 9000003 ×1, **9000013 ×121**. **Exact match to Phase 2 count.**
-- **Scenario 5 (replay attack):** 9000003 ×3, 9000013 ×1, 9000021 ×2 = 6 alerts. **Exact match to Phase 2 step 3c offline-replay against the original scenario-5 pcap.**
+- **Scenario 5 (replay attack):** 9000003 ×3, 9000013 ×1, 9000021 ×2 = 6 alerts. **Exact match to Phase 2 step 3c offline-replay against the original scenario-5 pcap.** **Re-confirmed live-fire 2026-06-01 (Queue Item 2):** same 6-alert breakdown, and the mutated FC 6 write to HR 1 read back **0/40 stuck** — identical to a fresh write (§31), confirming reassertion is **provenance-independent**: it ignores whether the packet was freshly forged or replayed/mutated from captured legitimate traffic.
 
 Plus a protocol-level confirmation from scenario 5: v4 mutated-write of HR 1 = 4242 was overwritten back to 20 within ~1 scan, identically to v3. **v4's §5.3 reassertion property holds.** Same wire protocol, same detection signal, same defensive properties.
 
