@@ -3,7 +3,7 @@
 **Date:** 2026-05-22
 **Source task:** Phase 2 attack scenarios (step 2 of Phase 2)
 **Attacker vantage:** `otlab-attacker` multi-homed on `ot_zone`
-(`172.18.0.4`), target `openplc:502` (`172.18.0.2`).
+(`172.18.0.4`), target `openplc_v4:502` (`172.18.0.5`).
 **Modbus map:** HR 1 = `%QW1` = `SP_Low_Out` (display-only mirror of
 internal `SP_Low`); HR 2 = `%QW2` = `SP_High_Out` (display-only mirror
 of internal `SP_High`).
@@ -21,7 +21,7 @@ polled by FUXA but not displayed, so a screenshot would not show the
 falsification. Adding setpoint displays to the HMI is tracked as a
 Phase 1 Open Item ("HMI layout polish"); not in scope here.
 
-Capture vantage: `tcpdump -i any` inside `otlab-openplc`. Filter
+Capture vantage: `tcpdump -i any` inside `otlab-openplc-v4`. Filter
 `'tcp port 502'`.
 
 ---
@@ -55,14 +55,14 @@ registers get falsified in one PDU, both reassert on the next scan.
 ## Commands
 
 ```bash
-docker exec -d otlab-openplc sh -c \
+docker exec -d otlab-openplc-v4 sh -c \
   "tcpdump -i any -U -w /tmp/scenario-4.pcap 'tcp port 502'"
 sleep 2
 
 docker exec -i otlab-attacker python3 - <<'PY'
 from pymodbus.client import ModbusTcpClient
 import time
-c = ModbusTcpClient(host='openplc', port=502)
+c = ModbusTcpClient(host='openplc_v4', port=502)
 c.connect()
 
 def snap(label, delay=0):
@@ -96,8 +96,8 @@ c.close()
 PY
 
 sleep 3
-docker exec otlab-openplc pkill tcpdump
-docker cp otlab-openplc:/tmp/scenario-4.pcap \
+docker exec otlab-openplc-v4 pkill tcpdump
+docker cp otlab-openplc-v4:/tmp/scenario-4.pcap \
   ./captures/phase2-scenario-4-hr-writes-2026-05-22.pcap
 ```
 
