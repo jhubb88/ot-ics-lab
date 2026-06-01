@@ -1186,6 +1186,79 @@ runbook §2 + §3 (Queue Item 1 update, this commit).
 
 ---
 
+## Queue Item 2 Findings
+
+Queue Item 2 — re-executing the Phase 2 attack scenarios as live-fire
+against the v4 stack. The gitignored `_ATTACK-RUNBOOK.md` holds the
+beginner-format procedures and full per-run evidence; findings §30+ below
+are the substantive results that belong in the public source-of-truth, not
+just the local runbook. First run: 2026-06-01.
+
+### 30. OpenPLC v4 reasserts program-driven outputs every scan cycle, defeating external coil-write spoofing that succeeded on v3 (2026-06-01)
+
+**Source:** Scenario 3 re-run, live-fired against the v4 stack on
+2026-06-01 — FC 5 write to the `High_Alarm` coil (address 2 = `%QX0.2`).
+Procedure + full evidence in `_ATTACK-RUNBOOK.md` (gitignored, local-only);
+canonical capture `captures/phase2-scenario-3-runbook-2026-06-01.pcap`,
+Suricata replay output `suricata/logs/runbook-scenario-3-2026-06-01/` (both
+gitignored). Directly updates Finding §6 for the v4 stack.
+
+**Summary:** The attack is **fully detected but has no observable effect on
+v4** — a clean split between the detection layer and the process layer.
+
+- **Detection layer (unchanged from §23):** offline Suricata replay with
+  `-k none` caught all 60 FC 5 writes (**9000012 ×60**) plus the initial SYN
+  to :502 (**9000003 ×1**) — exact match to §23's expected counts. (The same
+  run also fired 9000020 ×5 and 9000021 ×2 from the script's built-in
+  read-backs; those reads are not present in §23's pure-burst pcap.) The
+  write is accepted at the protocol layer and loud on the wire.
+
+- **Process layer (the new v4 result):** the write never becomes externally
+  visible. Evidence, four independent ways:
+  1. Write-coil-ON then immediate read-back, 40× on the same TCP connection
+     → **0/40 read back TRUE**.
+  2. A 12-second tight-loop hold of **~42,744** ON-writes → the coil never
+     once read back ON.
+  3. FUXA HMI alarm indicator read **NORMAL** across all 6 screenshots
+     spanning the burst and the hold (the tank/pump/valve widgets *did* move,
+     confirming the HMI was live and updating).
+  4. InfluxDB `high_alarm` = **0 across 24 consecutive samples**, including
+     the Telegraf sample at 15:37:06 that fell inside the 15:37:05–15:37:08
+     burst window.
+
+**Root cause:** `High_Alarm` is a program-driven output (`%QX0.2`). The v4
+runtime re-runs the program roughly every 100 ms and on every scan reasserts
+`High_Alarm := (Level >= 90%)` — FALSE in the normal 20–80 % operating
+range. An external Modbus write to a program-owned output is therefore
+overwritten within one scan cycle, before any read, HMI poll, or historian
+poll can observe it. This is the §5 / §5.3 reassertion property, now shown
+to be tight enough on v4 to mask the write **entirely** rather than merely
+transiently.
+
+**v3 contrast (the version-dependent security difference):** the v3
+scenario-3 doc recorded "operational deception confirmed" (Finding §6) — on
+v3 the same 3-second burst let a read catch ON about half the time
+(`AFTER +0ms = True` on one run) and produced a FUXA screenshot with the
+Alarm indicator ACTIVE at 72 %. On v4 the identical attack catches ON
+**0/40** and never trips the HMI. Same wire protocol, same detection signal,
+**opposite process-layer outcome.** v4's tighter scan-reassertion is itself a
+partial defense against output-spoofing — an emergent security property of
+the runtime rewrite, not a configured control.
+
+**Implication:** Finding §6's "operational deception confirmed" holds for v3
+but **does not reproduce on v4** for program-driven outputs. The detection
+conclusion (§6, §7: source-IP + FC, not state) is unchanged and if anything
+reinforced — the attack is still fully visible to Suricata. For future
+scenario design, a spoof-the-operator payload needs a target the PLC does
+**not** reassert every scan: a physical/logical **input**, an **unused/free
+register** the logic only reads, or an attack that **stops the program**
+(RUN→STOP) so reassertion ceases. Those are the conditions under which a
+falsified value would actually persist on the HMI; against a reasserted
+output it will not. Tracked as a pointer for the next attack-execution
+scenarios.
+
+---
+
 ## Phase 2 Backlog (security operations on the Phase 1 stack — documented; not built)
 
 - [x] **Suricata passive monitoring** — sub-sessions 3a (recon detection,
